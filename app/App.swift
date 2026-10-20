@@ -107,6 +107,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // Menu ouvert (modèle, réglages) : l'encoche ne se referme pas sous lui.
+        for (name, on) in [(NSMenu.didBeginTrackingNotification, true), (NSMenu.didEndTrackingNotification, false)] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { Store.shared.menuTracking(on) }
+            }
+        }
+
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }

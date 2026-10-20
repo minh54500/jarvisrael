@@ -449,7 +449,7 @@ private struct Who: View {
         HStack(spacing: 7) {
             Circle().fill(Color(hex: session?.color ?? "#FFFFFF")).frame(width: 8, height: 8)
             if let session { Text(session.name).fontWeight(.semibold) }
-            Text(suffix).foregroundStyle(Color.muted)
+            if !suffix.isEmpty { Text(suffix).foregroundStyle(Color.muted) }
         }
         .font(Fonts.label)
         .lineLimit(1)
@@ -494,7 +494,8 @@ private struct OverviewPanel: View {
             Card {
                 VStack(alignment: .leading, spacing: 7) {
                     HStack(spacing: 6) {
-                        Who(session: store.focused, suffix: "Claude Code")
+                        Who(session: store.focused, suffix: "")
+                        ModelMenu(store: store)
                         Spacer(minLength: 4)
                         if let s = store.focused {
                             Button { store.jump(to: s) } label: {
@@ -556,6 +557,44 @@ private struct OverviewPanel: View {
         case .error: "erreur"
         case .sleeping, .idle, .dizzy: "au repos"
         }
+    }
+}
+
+/// Le modèle de la session choisie, en pastille ; un clic propose les autres.
+private struct ModelMenu: View {
+    @ObservedObject var store: Store
+    @State private var hover = false
+
+    var body: some View {
+        let current = store.focused?.model ?? ""
+        Menu {
+            Section(store.focused.map { "Modèle de \($0.name)" } ?? "Modèle") {
+                ForEach(ClaudeModel.all) { m in
+                    Button { store.setModel(m) } label: {
+                        if m.arg == current { Label(m.name, systemImage: "checkmark") } else { Text(m.name) }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text(current.isEmpty ? "Modèle" : ClaudeModel.label(current)).lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
+            }
+            .font(Fonts.caption.weight(.medium))
+            .foregroundStyle(hover ? Color.ink : Color.soft)
+            .padding(.horizontal, 8)
+            .frame(height: 22)
+            .background(Capsule().fill(.white.opacity(hover ? 0.12 : 0.07)))
+            .contentShape(Capsule())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(store.focused == nil || store.sending)
+        .onHover { hover = $0 }
+        .help("Changer le modèle de Claude pour cette session")
+        .accessibilityLabel("Modèle : \(current.isEmpty ? "inconnu" : ClaudeModel.label(current))")
     }
 }
 

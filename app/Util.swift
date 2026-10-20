@@ -66,6 +66,19 @@ func superellipse(_ hw: Double, _ hh: Double, n: Double = 3.2, steps: Int = 72) 
     return p
 }
 
+/// Galet : superellipse un peu plus large en haut qu'en bas, `hw`/`hh` = demi-largeur/demi-hauteur.
+func pebblePath(_ hw: Double, _ hh: Double, steps: Int = 96) -> Path {
+    var p = Path()
+    for i in 0...steps {
+        let a = Double(i) / Double(steps) * 2 * .pi, ca = cos(a), sa = sin(a)
+        let y = hh * (sa < 0 ? -1 : 1) * pow(abs(sa), 2 / 2.4)
+        let x = hw * (ca < 0 ? -1 : 1) * pow(abs(ca), 2 / 2.4) * (1 - 0.07 * y / hh)  // haut plus large
+        i == 0 ? p.move(to: CGPoint(x: x, y: y)) : p.addLine(to: CGPoint(x: x, y: y))
+    }
+    p.closeSubpath()
+    return p
+}
+
 func heartPath(_ s: Double) -> Path {
     var p = Path()
     p.move(to: CGPoint(x: 0, y: s * 0.38))

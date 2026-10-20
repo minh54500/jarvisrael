@@ -14,6 +14,35 @@ struct Session: Identifiable {
     var termProgram = ""
     var entrypoint = ""  // "claude-vscode" : session de l'extension VS Code (onglet Claude Code)
     var message = ""
+    var model = ""  // "claude-opus-5-5"… annoncé par Claude Code au démarrage de la session
+}
+
+/// Modèles proposés dans l'encoche. `arg` est ce qu'on passe à `/model`.
+struct ClaudeModel: Identifiable {
+    let arg: String
+    let name: String
+    var id: String { arg }
+
+    static let all = [
+        ClaudeModel(arg: "claude-fable-5-1", name: "Fable 5.1"),
+        ClaudeModel(arg: "claude-opus-5-5", name: "Opus 5.5"),
+        ClaudeModel(arg: "claude-sonnet-5-5", name: "Sonnet 5.5"),
+        ClaudeModel(arg: "claude-haiku-5-5", name: "Haiku 5.5"),
+    ]
+
+    /// « claude-opus-5-5 » → « Opus 5.5 » (et « claude-sonnet-5-5[1m] » → « Sonnet 5.5 [1m] »).
+    static func label(_ id: String) -> String {
+        if let m = all.first(where: { $0.arg == id }) { return m.name }
+        var rest: String = id.hasPrefix("claude-") ? String(id.dropFirst(7)) : id
+        var suffix = ""
+        if let b = rest.firstIndex(of: "[") { suffix = " " + String(rest[b...]); rest = String(rest[..<b]) }
+        let parts: [String] = rest.components(separatedBy: "-")
+            .filter { !($0.count == 8 && $0.allSatisfy(\.isNumber)) }  // sans la date
+        guard let family = parts.first, !family.isEmpty else { return id }
+        let version: String = parts.dropFirst().filter { $0.allSatisfy(\.isNumber) }.joined(separator: ".")
+        let name: String = family.prefix(1).uppercased() + family.dropFirst()
+        return version.isEmpty ? name + suffix : "\(name) \(version)\(suffix)"
+    }
 }
 
 struct Permission: Identifiable {
@@ -156,7 +185,7 @@ final class Store: ObservableObject {
     }
 
     private var pinned: Bool {
-        if composing || sending { return true }
+        if composing || sending || menuOpen { return true }
         if !permissions.isEmpty && mode == .expanded && view == .approval { return true }
         if view == .choose || view == .converting || fileDragging { return true }
         if let pinUntil, Date() < pinUntil { return true }
@@ -376,7 +405,39 @@ final class Store: ObservableObject {
     /// Entrée : le message part dans la session choisie (voir Courier).
     func submitDraft() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !sending, let s = focused else { return }
+        guard !text.isEmpty, let s = focused else { return }
+        deliver(text, to: s) { copied in
+            self.draft = ""
+            if !copied { self.say("Envoyé à Claude ✓", ok: true) }
+        }
+    }
+
+    /// Change le modèle de la session choisie : `/model …` lui est envoyé comme un message.
+    func setModel(_ m: ClaudeModel) {
+        guard let s = focused, s.model != m.arg else { return }
+        deliver("/model \(m.arg)", to: s) { copied in
+            guard !copied else { return }
+            if var cur = self.session(s.id) { cur.model = m.arg; self.store(cur) }
+            self.say("\(s.name) passe à \(m.name) ✓", ok: true)
+        }
+    }
+
+    /// Un menu de l'encoche est ouvert : elle reste ouverte même si la souris en sort.
+    @Published var menuOpen = false
+
+    func menuTracking(_ on: Bool) {
+        menuOpen = on
+        if !on {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                if !self.hovering && !self.pinned { self.collapse() }
+            }
+        }
+    }
+
+    /// Envoie un texte à une session et gère les issues communes ; `done` reçoit `copied` = true
+    /// quand le texte a seulement été copié (session dans un terminal).
+    private func deliver(_ text: String, to s: Session, done: @escaping @MainActor (_ copied: Bool) -> Void) {
+        guard !sending else { return }
         if permissions.contains(where: { $0.session == s.id }) {
             return say("Réponds d'abord à sa demande d'autorisation.", ok: false)
         }
@@ -387,14 +448,13 @@ final class Store: ObservableObject {
             self.sending = false
             switch outcome {
             case .sent:
-                self.draft = ""
                 self.mochi.emote(.happy, 0.9)
                 Sound.shared.play("approve")
-                self.say("Envoyé à Claude ✓", ok: true)
+                done(false)
             case .copied:
-                self.draft = ""
                 Sound.shared.play("pop")
                 self.say("Copié ✓ Colle-le dans la session : ⌘V puis Entrée", ok: true)
+                done(true)
             case .needsPermission:
                 self.releaseKeyboard()
                 Sound.shared.play("question")
@@ -445,6 +505,7 @@ final class Store: ObservableObject {
         s.updated = Date()
         if let term = ev["term_program"] as? String, !term.isEmpty { s.termProgram = term }
         if let entry = ev["entrypoint"] as? String, !entry.isEmpty { s.entrypoint = entry }
+        if let model = ev["model"] as? String, !model.isEmpty { s.model = model }
 
         switch event {
         case "SessionStart":

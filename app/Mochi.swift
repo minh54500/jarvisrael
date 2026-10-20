@@ -7,7 +7,7 @@ enum BotState: String {
     case idle, working, waiting, approval, finished, error, sleeping, dizzy
 }
 
-enum Eye { case dot, wide, happy, content, closed, flat, spiral, heart, star, tired, wink, cup, line }
+enum Eye { case dot, wide, happy, content, closed, flat, spiral, heart, star, tired, wink, cup, line, focus }
 enum Badge { case dots, bang, question, dot }
 
 struct StateStyle {
@@ -25,8 +25,8 @@ struct StateStyle {
 }
 
 let STYLES: [BotState: StateStyle] = [
-    .idle: StateStyle(col: "#E6E9EE", tint: 0, eye: .dot, glow: "#FFFFFF", glowAlpha: 0.25),
-    .working: StateStyle(col: "#3B9EFF", tint: 0.6, eye: .dot, badge: .dots, glow: "#3B9EFF", glowAlpha: 0.55, sound: "work"),
+    .idle: StateStyle(col: "#E6E9EE", tint: 0, eye: .dot, glow: "#9F5BFF", glowAlpha: 0.35),
+    .working: StateStyle(col: "#3B9EFF", tint: 0.6, eye: .focus, badge: .dots, glow: "#3B9EFF", glowAlpha: 0.55, sound: "work"),
     .waiting: StateStyle(col: "#22D3EE", tint: 0.6, eye: .dot, badge: .question, glow: "#22D3EE", glowAlpha: 0.55, tilt: 0.17, sound: "question"),
     .approval: StateStyle(col: "#F5A524", tint: 0.7, eye: .wide, badge: .bang, glow: "#F5A524", glowAlpha: 0.6, bounce: true, sound: "approval"),
     .finished: StateStyle(col: "#34D399", tint: 0.35, eye: .happy, badge: .dot, glow: "#34D399", glowAlpha: 0.5, sound: "finish"),
@@ -35,14 +35,16 @@ let STYLES: [BotState: StateStyle] = [
     .dizzy: StateStyle(col: "#F472B6", tint: 0.6, eye: .spiral, glow: "#F472B6", glowAlpha: 0.55, sound: "dizzy"),
 ]
 
-private let WHITE0 = RGB(hex: "#FBFBFC"), WHITE1 = RGB(hex: "#E7E9EC")
+// Galet néon : dégradé rose → violet, reflet en haut à gauche, lueur violette ; yeux blanc-cyan qui brillent.
+private let TOP = RGB(hex: "#FF8BC4"), BOTTOM = RGB(hex: "#7B3DF2"), AURA = RGB(hex: "#8F4BFF")
+private let EYE = Color(hex: "#EFFCFF"), EYE_GLOW = Color(hex: "#4FD3FF")
 private let INK = Color(hex: "#16171A")
-private let ASPECT = 1.34
+private let ASPECT = 1.2
 
 final class Mochi {
     struct Anim {
         var lookX = 0.0, lookY = 0.0, tilt = 0.0, open = 1.0, sx = 1.0, sy = 1.0, ox = 0.0, oy = 0.0
-        var tint = 0.0, handL = 0.0, handR = 0.0, blush = 0.0, es = 1.0, badgeS = 0.0, roll = 0.0, mouth = 0.0
+        var tint = 0.0, blush = 0.0, es = 1.0, badgeS = 0.0, roll = 0.0, mouth = 0.0
     }
     typealias Key = WritableKeyPath<Anim, Double>
     private struct Tween {
@@ -74,7 +76,6 @@ final class Mochi {
     private var badgeCol = RGB(hex: "#FFFFFF")
     private var badgeKey = "none"
     private var nextBlink = 0.0
-    private var waveStart = -10.0, waveUntil = 0.0
     private var lastAmbient = 0.0
     private var last = 0.0
     private let born: Double
@@ -159,19 +160,6 @@ final class Mochi {
     func roll(_ d: Double, turns: Double) {
         s.roll = 0
         anim(\.roll, [(2 * .pi * turns, d, Ease.inOut)]) { self.s.roll = 0; self.tg.roll = 0 }
-    }
-
-    /// Petit coucou de la main (survol de l'encoche compacte).
-    func wave() {
-        anim(\.handL, [(1, 0.28, Ease.back)])
-        anim(\.handR, [(1, 0.28, Ease.back)])
-        waveStart = clock
-        waveUntil = clock + 1.5
-        emote(.happy, 1.5)
-        later(1.55) {
-            self.anim(\.handL, [(0, 0.24, Ease.inOut)])
-            self.anim(\.handR, [(0, 0.24, Ease.inOut)])
-        }
     }
 
     enum Emote { case love, surprised, proud, wink, yawn, happy, annoyed, gulp }
@@ -279,7 +267,7 @@ final class Mochi {
         tg.sx = style.breathe ? 1 - sin(t * 1.8) * 0.02 : 1
 
         let kLook = 1 - pow(0.0025, dt), kGen = 1 - pow(0.0008, dt)
-        let keys: [Key] = [\.lookX, \.lookY, \.tilt, \.open, \.sx, \.sy, \.ox, \.oy, \.tint, \.handL, \.handR, \.blush, \.es, \.badgeS, \.roll, \.mouth]
+        let keys: [Key] = [\.lookX, \.lookY, \.tilt, \.open, \.sx, \.sy, \.ox, \.oy, \.tint, \.blush, \.es, \.badgeS, \.roll, \.mouth]
         for key in keys where !locked.contains(key) {
             let k = (key == \Anim.lookX || key == \Anim.lookY) ? kLook : kGen
             s[keyPath: key] += (tg[keyPath: key] - s[keyPath: key]) * k
@@ -338,10 +326,6 @@ final class Mochi {
         if t >= 0.82 && t < 1.25 { s.lookX = 0; s.lookY = -0.2 }
         if t >= 1.52 && t < 2.45 { s.lookX = 0.55; s.lookY = -0.45 }
         if t >= 2.45 && t < 3.2 { s.lookX = -0.3; s.lookY = 0.6 }
-        // mains
-        s.handL = t < 2.58 ? Ease.back(seg(t, 1.36, 1.5)) : 1 - Ease.cubicIn(seg(t, 2.58, 2.77))
-        s.handR = t < 2.58 ? Ease.back(seg(t, 1.4, 1.54)) : 1 - Ease.cubicIn(seg(t, 2.61, 2.8))
-        if t >= 1.52 && t < 2.58 { waveStart = start + 1.52; waveUntil = start + 2.58 }
         greet = g
     }
 
@@ -369,17 +353,25 @@ final class Mochi {
         b.rotate(by: .radians(s.tilt))
         b.scaleBy(x: s.sx, y: s.sy)
 
-        drawHands(b, hw: hw, hh: hh)
-
-        let body = superellipse(hw, hh)
-        let (c0, c1) = bodyColor.map { ($0.mix(RGB(255, 255, 255), 0.35), $0.mix(RGB(0, 0, 0), 0.15)) } ?? (WHITE0, WHITE1)
+        let body = pebblePath(hw, hh)
+        let (c0, c1) = palette
+        if !mini {  // lueur douce autour du galet
+            var aura = b
+            aura.addFilter(.blur(radius: hh * 0.2))
+            aura.fill(body, with: .color(AURA.color(0.8 * greet.halo)))
+        }
         b.fill(body, with: .linearGradient(Gradient(colors: [c0.color(), c1.color()]),
-                                           startPoint: CGPoint(x: hw * 0.6, y: -hh), endPoint: CGPoint(x: -hw * 0.6, y: hh)))
-        if bodyColor == nil && s.tint > 0.01 {
-            b.fill(body, with: .linearGradient(Gradient(colors: [col.color(s.tint), col.color(0)]),
+                                           startPoint: CGPoint(x: 0, y: -hh), endPoint: CGPoint(x: 0, y: hh)))
+        if bodyColor == nil && s.tint > 0.01 {  // l'état de Claude teinte le bas du galet
+            b.fill(body, with: .linearGradient(Gradient(colors: [col.color(s.tint * 0.55), col.color(0)]),
                                                startPoint: CGPoint(x: 0, y: hh), endPoint: CGPoint(x: 0, y: -hh * 0.1)))
         }
-        b.stroke(body, with: .color(.black.opacity(0.08)), lineWidth: 0.6)
+        if !mini {  // reflet
+            var shine = Path()
+            shine.move(to: CGPoint(x: -hw * 0.74, y: -hh * 0.4))
+            shine.addQuadCurve(to: CGPoint(x: -hw * 0.44, y: -hh * 0.76), control: CGPoint(x: -hw * 0.7, y: -hh * 0.68))
+            b.stroke(shine, with: .color(.white.opacity(0.5)), style: StrokeStyle(lineWidth: hh * 0.09, lineCap: .round))
+        }
 
         var inner = b
         inner.clip(to: body)
@@ -399,15 +391,22 @@ final class Mochi {
         }
         // yeux
         let shape = eyeOverride ?? style.eye
-        let er = hbE * 0.06 * s.es, sp = hbE * 0.19
+        let er = hbE * 0.1 * s.es, sp = hbE * 0.21
         let lx = s.lookX * hw * 0.42
-        var ly = s.lookY * hh * 0.28 + hh * 0.12 + greet.eyeDrop * hh * 1.25 + s.mouth * hh * 0.5
+        var ly = s.lookY * hh * 0.28 - hh * 0.02 + greet.eyeDrop * hh * 1.25 + s.mouth * hh * 0.5
         if s.roll > 0.001 {  // les yeux font le tour du corps
             let f = (s.roll / (2 * .pi)).truncatingRemainder(dividingBy: 1)
             ly += f < 0.5 ? f * 2 * hh * 1.5 : -(1 - f) * 2 * hh * 1.5
         }
+        if !mini {  // halo cyan des yeux
+            var glow = inner
+            glow.addFilter(.blur(radius: er * 0.7))
+            for _ in 0..<2 {  // deux passes : la lueur se voit sur le rose
+                for sd in [-1.0, 1.0] { drawEye(glow, shape, x: sd * sp + lx, y: ly, er: er, side: sd, color: EYE_GLOW) }
+            }
+        }
         for sd in [-1.0, 1.0] {
-            drawEye(inner, shape, x: sd * sp + lx, y: ly, er: er, side: sd)
+            drawEye(inner, shape, x: sd * sp + lx, y: ly, er: er, side: sd, color: mini ? INK : EYE)
         }
 
         // badge
@@ -466,68 +465,61 @@ final class Mochi {
         }
     }
 
-    private func drawHands(_ ctx: GraphicsContext, hw: Double, hh: Double) {
-        let hb = hh * 2
-        let waving = now < waveUntil
-        let wave = now - waveStart
-        let white = Gradient(colors: [WHITE0.color(), WHITE1.color()])
-        // main gauche : petite boule
-        if s.handL > 0.01 {
-            let k = s.handL, r = hb * 0.15 * k
-            var y = lerp(hh * 0.85, hh * 0.62, k)
-            let x = lerp(-hw * 0.35, -hw - hb * 0.22, k)
-            if waving { y += sin(wave * 6) * hb * 0.02 }
-            let ball = Path(ellipseIn: CGRect(cx: x, cy: y, w: 2 * r, h: 2 * r))
-            ctx.fill(ball, with: .linearGradient(white, startPoint: CGPoint(x: x + r, y: y - r), endPoint: CGPoint(x: x - r, y: y + r)))
-            ctx.stroke(ball, with: .color(.black.opacity(0.08)), lineWidth: 0.6)
-        }
-        // main droite : capsule qui s'agite
-        if s.handR > 0.01 {
-            let k = s.handR, L = hb * 0.4 * k, T = hb * 0.22 * k
-            var x = lerp(hw * 0.35, hw + hb * 0.2, k), y = lerp(hh * 0.85, hh * 0.2, k), ang = -0.61
-            if waving {
-                let w = wave * 2 * .pi * 2.5
-                ang += sin(w) * 0.21
-                y += sin(w + 0.8) * hb * 0.04
-                x += cos(w) * hb * 0.015
-            }
-            var hc = ctx
-            hc.translateBy(x: x, y: y)
-            hc.rotate(by: .radians(ang))
-            let cap = Path(roundedRect: CGRect(x: -L / 2, y: -T / 2, width: L, height: T), cornerRadius: T / 2)
-            hc.fill(cap, with: .linearGradient(white, startPoint: CGPoint(x: L / 2, y: -T / 2), endPoint: CGPoint(x: -L / 2, y: T / 2)))
-            hc.stroke(cap, with: .color(.black.opacity(0.08)), lineWidth: 0.6)
-        }
+    /// Haut et bas du corps : le galet néon, ou la couleur de la session pour les mini.
+    private var palette: (RGB, RGB) {
+        guard let c = bodyColor else { return (TOP, BOTTOM) }
+        return (c.mix(RGB(255, 255, 255), 0.3), c.mix(RGB(0, 0, 0), 0.12))
     }
 
-    private func drawEye(_ ctx: GraphicsContext, _ shape: Eye, x: Double, y: Double, er: Double, side: Double) {
-        let ink = GraphicsContext.Shading.color(INK)
+    /// Yeux néon : ●● ouverts, —— fermés, ^^ contents, OO surpris, ó ò inquiets (ò ó fâchés), ‾● concentrés.
+    private func drawEye(_ ctx: GraphicsContext, _ shape: Eye, x: Double, y: Double, er: Double, side: Double, color: Color) {
+        let ink = GraphicsContext.Shading.color(color)
+        let line = StrokeStyle(lineWidth: er * 0.46, lineCap: .round, lineJoin: .round)
         func arc(_ cy: Double, _ r: Double, _ a0: Double, _ a1: Double, _ w: Double) {
             var p = Path()
             p.addArc(center: CGPoint(x: x, y: cy), radius: r, startAngle: .radians(a0), endAngle: .radians(a1), clockwise: false)
             ctx.stroke(p, with: ink, style: StrokeStyle(lineWidth: w, lineCap: .round))
         }
+        /// Rond qui s'aplatit en trait quand l'œil se ferme (clignement).
+        func dot(_ r: Double) {
+            let h = max(er * 0.46, 2 * r * s.open), w = 2 * r * (h < r ? 1.15 : 1)
+            ctx.fill(Path(roundedRect: CGRect(cx: x, cy: y, w: w, h: h), cornerRadius: min(w, h) / 2), with: ink)
+        }
+        /// Sourcil incliné : `inner` > 0 relève le côté du nez (inquiet), < 0 l'abaisse (fâché).
+        func brow(_ inner: Double) {
+            var p = Path()
+            p.move(to: CGPoint(x: x - side * er * 1.15, y: y - er * 1.75 - inner * er * 0.35))  // côté du nez
+            p.addLine(to: CGPoint(x: x + side * er * 0.95, y: y - er * 1.75 + inner * er * 0.35))
+            ctx.stroke(p, with: ink, style: line)
+        }
         switch shape {
-        case .dot, .wide:
-            let r = shape == .wide ? er * 1.35 : er
-            let h = 2 * r * max(0.12, s.open)
-            ctx.fill(Path(ellipseIn: CGRect(cx: x, cy: y, w: 2 * r, h: h)), with: ink)
+        case .dot:
+            dot(er)
+        case .wide:
+            ctx.stroke(Path(ellipseIn: CGRect(cx: x, cy: y, w: er * 2.3, h: er * 2.3 * max(0.2, s.open))), with: ink, style: line)
         case .happy:
-            arc(y + er * 0.6, er * 1.25, .pi * 1.15, .pi * 1.85, er * 0.95)
+            var p = Path()
+            p.move(to: CGPoint(x: x - er * 1.05, y: y + er * 0.45))
+            p.addLine(to: CGPoint(x: x, y: y - er * 0.55))
+            p.addLine(to: CGPoint(x: x + er * 1.05, y: y + er * 0.45))
+            ctx.stroke(p, with: ink, style: line)
         case .content:
-            arc(y - er * 0.5, er * 1.25, .pi * 0.15, .pi * 0.85, er * 0.95)
+            arc(y - er * 0.5, er * 1.15, .pi * 0.15, .pi * 0.85, er * 0.46)
         case .closed:
-            arc(y - er * 0.3, er * 1.2, .pi * 0.15, .pi * 0.85, er * 0.7)
+            ctx.fill(Path(roundedRect: CGRect(cx: x, cy: y, w: er * 2.4, h: er * 0.46), cornerRadius: er * 0.23), with: ink)
         case .flat:
-            ctx.fill(Path(roundedRect: CGRect(cx: x, cy: y, w: er * 2.6, h: er * 0.8), cornerRadius: er * 0.4), with: ink)
+            dot(er * 0.95)
+            brow(1)
         case .line:
-            var lc = ctx
-            lc.translateBy(x: x, y: y)
-            lc.rotate(by: .radians(-side * 0.25))
-            lc.fill(Path(roundedRect: CGRect(cx: 0, cy: 0, w: er * 2.8, h: er * 0.8), cornerRadius: er * 0.4), with: ink)
+            dot(er * 0.85)
+            brow(-1)
+        case .focus:  // paupière plate, la pupille glisse dessous sur le côté
+            let r = er * 0.78
+            ctx.fill(Path(ellipseIn: CGRect(cx: x + er * 0.42, cy: y + er * 0.12, w: 2 * r, h: 2 * r * max(0.3, s.open))), with: ink)
+            ctx.fill(Path(roundedRect: CGRect(cx: x - er * 0.05, cy: y - er * 0.42, w: er * 2.5, h: er * 0.46), cornerRadius: er * 0.23), with: ink)
         case .tired:
             ctx.fill(Path(roundedRect: CGRect(x: x - er, y: y - er * 0.1, width: 2 * er, height: er * 1.1), cornerRadius: er * 0.55), with: ink)
-            ctx.fill(Path(roundedRect: CGRect(cx: x, cy: y - er * 0.2, w: er * 2.6, h: er * 0.5), cornerRadius: er * 0.25), with: ink)
+            ctx.fill(Path(roundedRect: CGRect(cx: x, cy: y - er * 0.2, w: er * 2.6, h: er * 0.46), cornerRadius: er * 0.23), with: ink)
         case .spiral:
             var p = Path()
             var a = 0.0
@@ -537,7 +529,7 @@ final class Mochi {
                 a == 0 ? p.move(to: pt) : p.addLine(to: pt)
                 a += 0.2
             }
-            ctx.stroke(p, with: ink, style: StrokeStyle(lineWidth: er * 0.4, lineCap: .round))
+            ctx.stroke(p, with: ink, style: StrokeStyle(lineWidth: er * 0.36, lineCap: .round))
         case .heart:
             var hc = ctx
             hc.translateBy(x: x, y: y)
@@ -548,8 +540,8 @@ final class Mochi {
             sc.rotate(by: .radians(now * 1.5 * side))
             sc.fill(starPath(er * 2.1, er * 0.95), with: .color(Color(hex: "#F7B32B")))
         case .wink:
-            if side < 0 { drawEye(ctx, .dot, x: x, y: y, er: er, side: side) }
-            else { drawEye(ctx, .happy, x: x, y: y, er: er, side: side) }
+            if side < 0 { drawEye(ctx, .dot, x: x, y: y, er: er, side: side, color: color) }
+            else { drawEye(ctx, .happy, x: x, y: y, er: er, side: side, color: color) }
         case .cup:
             var p = Path()
             p.move(to: CGPoint(x: x - er, y: y - er * 0.6))
