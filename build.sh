@@ -36,14 +36,20 @@ cat > $APP/Contents/Info.plist <<EOF
   <key>NSAppleEventsUsageDescription</key><string>Encoche pilote Spotify depuis l'encoche : lecture, pause, morceau suivant.</string>
 </dict></plist>
 EOF
-codesign --force --deep -s - $APP 2>/dev/null || true
+# Signature : le certificat local « Encoche Dev » (tools/cert.sh, à lancer une fois) garde la même
+# identité d'un build à l'autre, donc macOS garde les autorisations (Accessibilité, Spotify).
+# Sans lui, signature ad hoc : nouvelle identité à chaque build, autorisations à redonner.
+if security find-certificate -c "Encoche Dev" >/dev/null 2>&1; then SIGN="Encoche Dev"; else SIGN=-; fi
+codesign --force --deep -s "$SIGN" $APP 2>/dev/null || { SIGN=-; codesign --force --deep -s - $APP 2>/dev/null || true; }
 
 osascript -e 'quit app "Encoche"' 2>/dev/null || true
 mkdir -p ~/Applications
 rm -rf ~/Applications/Encoche.app
 cp -R $APP ~/Applications/
-# Signature ad hoc = nouvelle identité à chaque build : l'ancienne autorisation « Accessibilité »
-# ne vaut plus. On l'efface pour que macOS la redemande proprement au premier envoi.
-tccutil reset Accessibility io.github.minh54500.encoche >/dev/null 2>&1 || true
-tccutil reset AppleEvents io.github.minh54500.encoche >/dev/null 2>&1 || true  # idem pour piloter Spotify
+if [[ $SIGN == - ]]; then
+  # Ad hoc : l'ancienne autorisation ne vaut plus. On l'efface pour que macOS la redemande proprement.
+  tccutil reset Accessibility io.github.minh54500.encoche >/dev/null 2>&1 || true
+  tccutil reset AppleEvents io.github.minh54500.encoche >/dev/null 2>&1 || true
+  echo "ℹ︎ Lance tools/cert.sh une fois : tu n'auras plus à réautoriser Encoche après chaque build."
+fi
 echo "✓ Installé : ~/Applications/Encoche.app (v$VERSION)"
