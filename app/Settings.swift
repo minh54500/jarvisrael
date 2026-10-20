@@ -63,6 +63,15 @@ private struct SettingsView: View {
     @AppStorage("friends.on") private var friendsOn = false
     @AppStorage("friends.name") private var friendsName = ""
     @AppStorage("friends.group") private var friendsGroup = ""
+    @ObservedObject private var friends = Friends.shared
+    @State private var newPrivate = ""
+
+    private func createPrivate() {
+        let name = newPrivate.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        friends.createPrivate(name)
+        newPrivate = ""
+    }
 
     var body: some View {
         Form {
@@ -191,6 +200,35 @@ private struct SettingsView: View {
             }
             .onChange(of: friendsGroup) { _, _ in Friends.shared.restartSoon() }
             .onChange(of: friendsName) { _, _ in Friends.shared.restartSoon() }
+
+            Section("Conversations privées") {
+                ForEach(friends.privates) { c in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(c.name)
+                            Text(Friends.link(c.id)).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                        }
+                        Spacer()
+                        Button("Copier le lien") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(Friends.link(c.id), forType: .string)
+                        }
+                        Button { friends.removePrivate(c) } label: { Image(systemName: "trash") }
+                            .buttonStyle(.plain).foregroundStyle(.secondary)
+                            .help("Supprimer cette conversation").accessibilityLabel("Supprimer la conversation \(c.name)")
+                    }
+                }
+                HStack {
+                    TextField("Avec qui ?", text: $newPrivate, prompt: Text("Son prénom"))
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit(createPrivate)
+                    Button("Créer", action: createPrivate).disabled(newPrivate.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                Text("Une conversation à deux, hors du groupe de potes. Envoie le lien à la personne : elle installe l'app ntfy "
+                     + "(iPhone ou Android), s'abonne au lien et reçoit tes messages en notification. Pour répondre, elle écrit "
+                     + "dans l'app, son prénom dans « Titre ». Le lien sert de mot de passe : ne le donne qu'à elle.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
 
             Section("Général") {
                 Toggle("Sons", isOn: Binding(get: { Sound.shared.on }, set: { Sound.shared.on = $0; store.objectWillChange.send() }))
