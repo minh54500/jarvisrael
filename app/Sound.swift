@@ -53,24 +53,46 @@ final class Sound {
         for (name, (tones, noises)) in lib { buffers[name] = render(tones, noises) }
     }
 
+    /// Tout ce qui touche au moteur audio passe par cette file : l'animation n'est jamais bloquée.
+    private let queue = DispatchQueue(label: "encoche.sound")
+    private var stopWork: DispatchWorkItem?
+
+    /// Prépare les lecteurs à l'avance (sans faire tourner la sortie audio).
+    func warmUp() {
+        queue.async { self.setUpIfNeeded() }
+    }
+
     func play(_ name: String) {
         guard on, let buffer = buffers[name] else { return }
-        if !started {
-            for _ in 0..<6 {
-                let p = AVAudioPlayerNode()
-                engine.attach(p)
-                engine.connect(p, to: engine.mainMixerNode, format: format)
-                players.append(p)
+        queue.async {
+            self.setUpIfNeeded()
+            if !self.engine.isRunning {
+                do { try self.engine.start() } catch { return }
             }
-            engine.mainMixerNode.outputVolume = 0.8
-            do { try engine.start() } catch { return }
-            started = true
+            let p = self.players[self.next % self.players.count]
+            self.next += 1
+            if p.isPlaying { p.stop() }
+            p.scheduleBuffer(buffer, at: nil)
+            p.play()
+            // Moteur arrêté après 3 s de silence : il ne consomme rien entre deux sons.
+            self.stopWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.engine.pause() }
+            self.stopWork = work
+            self.queue.asyncAfter(deadline: .now() + 3, execute: work)
         }
-        let p = players[next % players.count]
-        next += 1
-        p.stop()
-        p.scheduleBuffer(buffer, at: nil)
-        p.play()
+    }
+
+    private func setUpIfNeeded() {
+        guard !started else { return }
+        for _ in 0..<6 {
+            let p = AVAudioPlayerNode()
+            engine.attach(p)
+            engine.connect(p, to: engine.mainMixerNode, format: format)
+            players.append(p)
+        }
+        engine.mainMixerNode.outputVolume = 0.8
+        engine.prepare()
+        started = true
     }
 
     private func render(_ tones: [Tone], _ noises: [Noise]) -> AVAudioPCMBuffer {

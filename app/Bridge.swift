@@ -29,6 +29,8 @@ final class Bridge {
 
     private var listenFD: Int32 = -1
     private var source: DispatchSourceRead?
+    /// File série : les événements sont lus et transmis dans l'ordre où ils arrivent.
+    private let queue = DispatchQueue(label: "encoche.bridge")
     private let onEvent: ([String: Any], Responder?) -> Void
 
     init(onEvent: @escaping ([String: Any], Responder?) -> Void) { self.onEvent = onEvent }
@@ -52,7 +54,7 @@ final class Bridge {
         guard bound == 0, listen(listenFD, 16) == 0 else { return }
         chmod(Self.socketPath, 0o600)
 
-        let src = DispatchSource.makeReadSource(fileDescriptor: listenFD, queue: .global())
+        let src = DispatchSource.makeReadSource(fileDescriptor: listenFD, queue: queue)
         src.setEventHandler { [weak self] in self?.accept() }
         src.resume()
         source = src
@@ -66,7 +68,7 @@ final class Bridge {
         var tv = timeval(tv_sec: 2, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
 
-        DispatchQueue.global().async {
+        do {
             var data = Data()
             var buf = [UInt8](repeating: 0, count: 65536)
             while true {

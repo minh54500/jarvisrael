@@ -12,33 +12,51 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+/// Panneau collé en haut de l'écran, au-dessus de la barre des menus.
+final class NotchPanel: NSPanel {
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var panel: NSPanel!
-    private var renderer: Renderer!
+    private var panel: NotchPanel!
     private var bridge: Bridge!
     private var timer: Timer?
     private var wasPressed = false
     private var dragCount = 0
+    /// Empêche App Nap : sans ça, macOS endort l'app (pas de fenêtre au premier plan)
+    /// et l'animation tombe à quelques images par seconde.
+    private var noNap: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        noNap = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
+                                                      reason: "Animation de l'encoche")
+        // Sons rendus en tâche de fond, moteur audio prêt avant la première animation.
+        DispatchQueue.global(qos: .utility).async {
+            _ = Sound.shared
+            DispatchQueue.main.async { Sound.shared.warmUp() }
+        }
         MainActor.assumeIsolated { setUp() }
     }
 
     @MainActor private func setUp() {
         let store = Store.shared
         store.notch = notchSize(on: Self.notchScreen)
-        renderer = Renderer(store: store)
 
-        panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.level = .statusBar
+        panel = NotchPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 3)
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
+        panel.isMovable = false
         panel.ignoresMouseEvents = true
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
-        panel.contentView = FirstClickHostingView(rootView: IslandRoot(store: store, renderer: renderer))
+        let host = FirstClickHostingView(rootView: IslandRoot(store: store))
+        host.sizingOptions = []
+        panel.contentView = host
         place()
         panel.orderFrontRegardless()
 
@@ -53,30 +71,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { self?.track() }
         }
         RunLoop.main.add(timer!, forMode: .common)
+        if ProcessInfo.processInfo.environment["ENCOCHE_FPS"] != nil {
+            Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let p = self?.panel else { return }
+                    print("fenêtre visible : \(p.occlusionState.contains(.visible)) · à l'écran : \(p.isVisible) · mode : \(Store.shared.mode)")
+                    fflush(stdout)
+                }
+            }
+        }
 
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                Store.shared.notch = self?.notchSize(on: Self.notchScreen) ?? Store.shared.notch
-                self?.place()
+                guard let self else { return }
+                Store.shared.notch = self.notchSize(on: Self.notchScreen)
+                self.place()
             }
         }
-        // Petit bonjour au premier lancement
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { store.expandDefault() }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { store.collapse() }
     }
 
     private static var notchScreen: NSScreen {
         NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main ?? NSScreen.screens[0]
     }
 
+    /// Taille exacte de l'encoche matérielle (ou d'une encoche « virtuelle » sur un écran sans encoche).
     private func notchSize(on screen: NSScreen) -> CGSize {
         if let l = screen.auxiliaryTopLeftArea, let r = screen.auxiliaryTopRightArea, screen.safeAreaInsets.top > 0 {
             return CGSize(width: screen.frame.width - l.width - r.width, height: screen.safeAreaInsets.top)
         }
-        return CGSize(width: 184, height: NSStatusBar.system.thickness + 8)
+        return CGSize(width: 184, height: max(24, NSApp.mainMenu?.menuBarHeight ?? 24))
     }
 
-    private func place() {
+    @MainActor private func place() {
         let s = Self.notchScreen.frame, size = Store.panelSize
         panel.setFrame(NSRect(x: s.midX - size.width / 2, y: s.maxY - size.height, width: size.width, height: size.height), display: true)
     }
@@ -87,18 +113,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let m = NSEvent.mouseLocation, f = panel.frame
         let p = CGPoint(x: m.x - f.minX, y: f.maxY - m.y)
         let target = store.islandTarget
-        var hit = CGRect(x: Renderer.centerX - target.width / 2, y: 0, width: target.width, height: target.height)
-        if store.mode != .expanded { hit = hit.insetBy(dx: -6, dy: 0); hit.size.height += 6 }
-        let inside = hit.contains(p) && m.y <= f.maxY + 1
+        var hit = CGRect(x: f.width / 2 - target.width / 2, y: 0, width: target.width, height: target.height)
+        if store.mode != .expanded { hit = hit.insetBy(dx: -8, dy: 0); hit.size.height += 4 }
+        let inside = hit.contains(p) && m.y <= f.maxY + 2
         if panel.ignoresMouseEvents == inside { panel.ignoresMouseEvents = !inside }
         store.setHover(inside)
-        store.pointerMoved(to: p, mochiCenter: store.mode == .expanded ? renderer.mochiCenter : nil)
+        store.pointerMoved(to: p, mochiCenter: store.mode == .expanded ? store.mochiCenterInPanel : nil)
 
         let pressed = NSEvent.pressedMouseButtons & 1 != 0
         let pb = NSPasteboard(name: .drag)
         if pressed && !wasPressed { dragCount = pb.changeCount }
         wasPressed = pressed
         let filesDragged = pressed && pb.changeCount != dragCount && (pb.types?.contains(.fileURL) ?? false)
-        store.setFileDrag(filesDragged && p.y < 230 && abs(p.x - Renderer.centerX) < 340)
+        store.setFileDrag(filesDragged && p.y < 230 && abs(p.x - f.width / 2) < 340)
     }
 }

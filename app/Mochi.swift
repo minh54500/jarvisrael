@@ -99,13 +99,16 @@ final class Mochi {
 
     // MARK: Animations
 
+    /// Horloge réelle : les actions démarrent maintenant, même si le Mochi était en pause (caché).
+    private var clock: Double { CACurrentMediaTime() }
+
     func anim(_ key: Key, _ keys: [(Double, Double, (Double) -> Double)], after: (() -> Void)? = nil) {
         tweens.removeAll { $0.key == key }
-        tweens.append(Tween(key: key, keys: keys, from: s[keyPath: key], t0: now, after: after))
+        tweens.append(Tween(key: key, keys: keys, from: s[keyPath: key], t0: clock, after: after))
         locked.insert(key)
     }
 
-    func later(_ delay: Double, _ action: @escaping () -> Void) { timers.append((now + delay, action)) }
+    func later(_ delay: Double, _ action: @escaping () -> Void) { timers.append((clock + delay, action)) }
 
     func setState(_ n: BotState, force: Bool = false) {
         guard force || n != state, let st = STYLES[n] else { return }
@@ -162,8 +165,8 @@ final class Mochi {
     func wave() {
         anim(\.handL, [(1, 0.28, Ease.back)])
         anim(\.handR, [(1, 0.28, Ease.back)])
-        waveStart = now
-        waveUntil = now + 1.5
+        waveStart = clock
+        waveUntil = clock + 1.5
         emote(.happy, 1.5)
         later(1.55) {
             self.anim(\.handL, [(0, 0.24, Ease.inOut)])
@@ -174,7 +177,7 @@ final class Mochi {
     enum Emote { case love, surprised, proud, wink, yawn, happy, annoyed, gulp }
 
     func emote(_ e: Emote, _ d: Double = 1.8) {
-        overrideUntil = now + d
+        overrideUntil = clock + d
         switch e {
         case .love:
             eyeOverride = .heart
@@ -228,7 +231,7 @@ final class Mochi {
         }
     }
 
-    func startGreeting() { greetStart = now }
+    func startGreeting() { greetStart = clock }
 
     // MARK: Mise à jour
 

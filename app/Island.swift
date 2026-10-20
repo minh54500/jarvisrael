@@ -2,128 +2,38 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-// MARK: - Moteur de rendu (ressorts de l'island et du Mochi, une mise à jour par image)
+// MARK: - Forme de l'island (encoche agrandie)
 
-@MainActor
-final class Renderer {
-    let store: Store
-    private var w: Spring, h: Spring
-    private var mx = Spring(27), my = Spring(16), mhb = Spring(0)
-    private var last = CACurrentMediaTime()
-    private let rings: [(t0: Double, dots: [(a: Double, j: Double, s: Double, al: Double)])]
-    private let streaks: [(a: Double, sp: Double, len: Double, t0: Double, col: Color)]
+/// Rectangle aux coins bas arrondis, avec deux « ailes » concaves en haut qui se fondent
+/// dans le bord de l'écran (les ::before/::after du prototype). Taille et rayons animables.
+struct IslandShape: Shape {
+    var flare: Double
+    var radius: Double
 
-    init(store: Store) {
-        self.store = store
-        w = Spring(store.notch.width, response: 0.45, damping: 0.78)
-        h = Spring(store.notch.height, response: 0.45, damping: 0.78)
-        var seed: UInt64 = 7
-        func rnd() -> Double { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Double(seed >> 11) / Double(1 << 53) }
-        rings = [0.10, 0.20, 0.30, 0.45, 0.60].map { t0 in
-            (t0, (0..<170).map { _ in (rnd() * 2 * .pi, (rnd() - 0.5) * 0.22, 0.7 + rnd() * 0.9, 0.45 + rnd() * 0.55) })
-        }
-        let cols = ["#3B9EFF", "#F29B38", "#FF5A4E", "#2EC4A0", "#A78BFA"]
-        streaks = (0..<16).map { i in
-            (Double(i) / 16 * 2 * .pi + (rnd() - 0.5) * 0.3, 230 + rnd() * 260, 6 + rnd() * 9, 0.08 + rnd() * 0.14, Color(hex: cols[i % 5]))
-        }
+    var animatableData: AnimatablePair<Double, Double> {
+        get { AnimatablePair(flare, radius) }
+        set { flare = newValue.first; radius = newValue.second }
     }
 
-    static var centerX: Double { Store.panelSize.width / 2 }
-
-    var islandRect: CGRect { CGRect(x: Self.centerX - w.v / 2, y: 0, width: w.v, height: h.v) }
-    var mochiCenter: CGPoint { CGPoint(x: islandRect.minX + mx.v, y: my.v) }
-
-    func tick() {
-        let now = CACurrentMediaTime()
-        guard now > last else { return }
-        let dt = min(0.05, now - last)
-        last = now
-        let target = store.islandTarget
-        let collapsing = target.height < h.v - 1
-        w.response = collapsing ? 0.34 : 0.45
-        h.response = w.response
-        w.damping = collapsing ? 0.95 : 0.78
-        h.damping = w.damping
-        w.step(to: target.width, dt: dt)
-        h.step(to: target.height, dt: dt)
-        let slot = store.mochiSlot
-        mx.step(to: slot.x, dt: dt)
-        my.step(to: slot.y, dt: dt)
-        mhb.step(to: slot.hb, dt: dt)
-
-        let c = mochiCenter, p = store.pointer
-        store.mochi.lookTarget = (tanh((p.x - c.x) / 260), tanh((p.y - c.y) / 200))
-        store.mochi.update(now)
-        for m in store.minis.values { m.update(now) }
-    }
-
-    func drawIsland(_ ctx: GraphicsContext) {
-        let r = islandRect, f = 14.0
-        let radius = min(30, max(10, (r.height - store.notch.height) * 0.3 + 10))
+    func path(in rect: CGRect) -> Path {
+        let k = 0.5523  // quart de cercle en Bézier
+        let f = flare, x0 = rect.minX + f, x1 = rect.maxX - f, h = rect.maxY
+        let r = max(0, min(radius, rect.height / 2, (x1 - x0) / 2))
         var p = Path()
-        p.move(to: CGPoint(x: r.minX - f, y: 0))
-        p.addQuadCurve(to: CGPoint(x: r.minX, y: f), control: CGPoint(x: r.minX, y: 0))
-        p.addLine(to: CGPoint(x: r.minX, y: r.maxY - radius))
-        p.addQuadCurve(to: CGPoint(x: r.minX + radius, y: r.maxY), control: CGPoint(x: r.minX, y: r.maxY))
-        p.addLine(to: CGPoint(x: r.maxX - radius, y: r.maxY))
-        p.addQuadCurve(to: CGPoint(x: r.maxX, y: r.maxY - radius), control: CGPoint(x: r.maxX, y: r.maxY))
-        p.addLine(to: CGPoint(x: r.maxX, y: f))
-        p.addQuadCurve(to: CGPoint(x: r.maxX + f, y: 0), control: CGPoint(x: r.maxX, y: 0))
+        p.move(to: CGPoint(x: rect.minX, y: 0))
+        if f > 0.01 {
+            p.addCurve(to: CGPoint(x: x0, y: f), control1: CGPoint(x: rect.minX + f * k, y: 0), control2: CGPoint(x: x0, y: f - f * k))
+        }
+        p.addLine(to: CGPoint(x: x0, y: h - r))
+        p.addCurve(to: CGPoint(x: x0 + r, y: h), control1: CGPoint(x: x0, y: h - r + r * k), control2: CGPoint(x: x0 + r - r * k, y: h))
+        p.addLine(to: CGPoint(x: x1 - r, y: h))
+        p.addCurve(to: CGPoint(x: x1, y: h - r), control1: CGPoint(x: x1 - r + r * k, y: h), control2: CGPoint(x: x1, y: h - r + r * k))
+        p.addLine(to: CGPoint(x: x1, y: f))
+        if f > 0.01 {
+            p.addCurve(to: CGPoint(x: rect.maxX, y: 0), control1: CGPoint(x: x1, y: f - f * k), control2: CGPoint(x: rect.maxX - f * k, y: 0))
+        }
         p.closeSubpath()
-        ctx.fill(p, with: .color(.black))
-    }
-
-    func drawCharacters(_ ctx: GraphicsContext) {
-        let r = islandRect
-        var c = ctx
-        c.clip(to: Path(CGRect(x: r.minX - 20, y: 0, width: r.width + 40, height: r.height + 30)))
-        let now = CACurrentMediaTime()
-
-        // ondes et traînées du coucou d'entrée (greeting-v2)
-        if store.view == .greeting, store.mode == .expanded, let start = store.mochi.greetStart {
-            let t = now - start
-            let card = CGRect(x: r.minX + 10, y: 36, width: r.width - 20, height: max(0, r.height - 46))
-            var rc = c
-            rc.clip(to: Path(roundedRect: card, cornerRadius: 20))
-            let cx = r.minX + mx.v, cy = my.v
-            for ring in rings {
-                let k = seg(t, ring.t0, ring.t0 + 1.35)
-                guard k > 0 && k < 1 else { continue }
-                let rx = lerp(14, 380, Ease.out(k)), ry = rx * 0.34
-                let fade = (1 - k) * (k < 0.08 ? k / 0.08 : 1)
-                for d in ring.dots {
-                    let rr = 1 + d.j
-                    rc.fill(Path(CGRect(x: cx + cos(d.a) * rx * rr, y: cy + sin(d.a) * ry * rr, width: d.s, height: d.s)),
-                            with: .color(.white.opacity(d.al * fade)))
-                }
-            }
-            for s in streaks {
-                let k = seg(t, s.t0, s.t0 + 0.6)
-                guard k > 0 && k < 1 else { continue }
-                let dist = s.sp * Ease.out(k) * 0.9 + 10
-                var line = Path()
-                line.move(to: CGPoint(x: cx + cos(s.a) * (dist - s.len), y: cy + sin(s.a) * (dist - s.len) * 0.42))
-                line.addLine(to: CGPoint(x: cx + cos(s.a) * dist, y: cy + sin(s.a) * dist * 0.42))
-                rc.stroke(line, with: .color(s.col.opacity(1 - k)), style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
-            }
-        }
-
-        // mini-Mochis des sessions, dans l'oreille droite de l'encoche compacte
-        if store.mode == .compact {
-            let list = Array(store.sessions.prefix(4))
-            let sp = 6.0
-            let offsets: [[(Double, Double)]] = [[(0, 0)], [(-sp, 0), (sp, 0)], [(-sp, -sp), (sp, -sp), (0, sp)], [(-sp, -sp), (sp, -sp), (-sp, sp), (sp, sp)]]
-            let alpha = clamp((r.width - store.notch.width) / 104, 0, 1)
-            for (i, s) in list.enumerated() {
-                let o = offsets[list.count - 1][i]
-                store.minis[s.id]?.draw(c, cx: r.maxX - 27 + o.0, cy: store.notch.height / 2 + o.1, hb: list.count == 1 ? 13 : 7.5, alpha: alpha)
-            }
-        }
-
-        if mhb.v > 0.5 {
-            let alpha = store.mode == .hidden ? clamp(mhb.v / 17, 0, 1) : 1
-            store.mochi.draw(c, cx: r.minX + mx.v, cy: my.v, hb: mhb.v, alpha: alpha)
-        }
+        return p
     }
 }
 
@@ -131,49 +41,145 @@ final class Renderer {
 
 struct IslandRoot: View {
     @ObservedObject var store: Store
-    let renderer: Renderer
-    @State private var animating = true
 
     var body: some View {
+        let size = store.islandTarget
+        let flare = store.mode == .hidden ? 0.0 : 14.0
+        let radius = store.mode == .expanded ? 30.0 : store.mode == .compact ? 14.0 : 10.0
         ZStack(alignment: .top) {
-            TimelineView(.animation(paused: !animating)) { _ in
-                Canvas { ctx, _ in
-                    renderer.tick()
-                    renderer.drawIsland(ctx)
+            IslandShape(flare: flare, radius: radius)
+                .fill(Color.black)
+                .frame(width: size.width + 2 * flare, height: size.height)
+            ZStack(alignment: .topLeading) {
+                IslandContent(store: store)
+                    .frame(width: size.width, height: size.height, alignment: .top)
+                // Un seul minuteur pour tous les personnages : 60 images/s ouverte, 30 en compact.
+                TimelineView(.animation(minimumInterval: store.mode == .expanded ? nil : 1.0 / 30,
+                                        paused: store.mode == .hidden && store.mochiSlot.hb < 0.5)) { timeline in
+                    ZStack(alignment: .topLeading) {
+                        MinisView(store: store, frame: timeline.date)
+                            .frame(width: 52, height: store.notch.height)
+                            .position(x: size.width - 26, y: store.notch.height / 2)
+                            .opacity(store.mode == .compact ? 1 : 0)
+                        MochiView(store: store, frame: timeline.date)
+                    }
                 }
             }
-            IslandContent(store: store)
-                .offset(x: 0, y: 0)
-            TimelineView(.animation(paused: !animating)) { _ in
-                Canvas { ctx, _ in
-                    renderer.tick()
-                    renderer.drawCharacters(ctx)
-                }
-            }
-            .allowsHitTesting(false)
-            mochiHitTarget
+            .frame(width: size.width, height: size.height)
+            .clipShape(IslandShape(flare: 0, radius: radius))
         }
         .frame(width: Store.panelSize.width, height: Store.panelSize.height, alignment: .top)
-        .onChange(of: store.mode) { _, mode in
-            if mode == .hidden {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { if store.mode == .hidden { animating = false } }
-            } else {
-                animating = true
+    }
+}
+
+/// Le Mochi, dessiné dans un petit cadre qui le suit (pas dans tout le panneau).
+/// `frame` vient du minuteur : l'utiliser dans le Canvas force SwiftUI à le redessiner à chaque image.
+struct MochiView: View {
+    @ObservedObject var store: Store
+    let frame: Date
+
+    var body: some View {
+        let slot = store.mochiSlot
+        let side = max(1, slot.hb * 4)
+        Canvas { [frame] ctx, size in
+            _ = frame
+            FPS.tick()
+            let c = store.mochiCenterInPanel, p = store.pointer
+            store.mochi.lookTarget = (tanh((p.x - c.x) / 260), tanh((p.y - c.y) / 200))
+            store.mochi.update(CACurrentMediaTime())
+            store.mochi.draw(ctx, cx: size.width / 2, cy: size.height / 2, hb: size.height / 4)
+        }
+        .frame(width: side, height: side)
+        .contentShape(Circle().inset(by: side * 0.3))
+        .onTapGesture { store.mochiTapped() }
+        .contextMenu { SettingsMenu(store: store) }
+        .position(x: slot.x, y: slot.y)
+        .opacity(slot.hb < 0.5 ? 0 : 1)
+    }
+}
+
+/// Mini-Mochis des sessions, dans l'oreille droite de l'encoche compacte.
+struct MinisView: View {
+    @ObservedObject var store: Store
+    let frame: Date
+
+    var body: some View {
+        Canvas { [frame] ctx, size in
+            _ = frame
+            guard store.mode == .compact else { return }
+            let list = Array(store.sessions.prefix(4))
+            guard !list.isEmpty else { return }
+            let now = CACurrentMediaTime(), sp = 6.0
+            let offsets: [[(Double, Double)]] = [[(0, 0)], [(-sp, 0), (sp, 0)], [(-sp, -sp), (sp, -sp), (0, sp)],
+                                                 [(-sp, -sp), (sp, -sp), (-sp, sp), (sp, sp)]]
+            for (i, s) in list.enumerated() {
+                guard let m = store.minis[s.id] else { continue }
+                let o = offsets[list.count - 1][i]
+                m.update(now)
+                m.draw(ctx, cx: size.width / 2 + o.0, cy: size.height / 2 + o.1, hb: list.count == 1 ? 13 : 7.5)
             }
         }
     }
+}
 
-    /// Zone cliquable sur le Mochi : claques et menu (clic droit).
-    private var mochiHitTarget: some View {
-        let slot = store.mochiSlot, size = store.islandTarget
-        let x = Renderer.centerX - size.width / 2 + slot.x
-        return Circle()
-            .fill(Color.white.opacity(0.001))
-            .frame(width: max(24, slot.hb * 1.5), height: max(24, slot.hb * 1.5))
-            .position(x: x, y: slot.y)
-            .onTapGesture { store.mochiTapped() }
-            .contextMenu { SettingsMenu(store: store) }
-            .opacity(store.mode == .hidden ? 0 : 1)
+/// Ondes et traînées du coucou d'entrée (greeting-v2). Les points sont regroupés par opacité :
+/// une vingtaine de remplissages par image au lieu de 850.
+struct GreetingRings: View {
+    let store: Store
+    let center: CGPoint
+
+    private struct Ring { let t0: Double; let buckets: [(alpha: Double, dots: [(a: Double, j: Double, s: Double)])] }
+    private static let data: (rings: [Ring], streaks: [(a: Double, sp: Double, len: Double, t0: Double, col: Color)]) = {
+        var seed: UInt64 = 7
+        func rnd() -> Double { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Double(seed >> 11) / Double(1 << 53) }
+        let rings = [0.10, 0.20, 0.30, 0.45, 0.60].map { t0 -> Ring in
+            var buckets: [[(a: Double, j: Double, s: Double)]] = Array(repeating: [], count: 4)
+            for _ in 0..<170 {
+                let dot = (a: rnd() * 2 * .pi, j: (rnd() - 0.5) * 0.22, s: 0.7 + rnd() * 0.9)
+                buckets[min(3, Int(rnd() * 4))].append(dot)
+            }
+            return Ring(t0: t0, buckets: buckets.enumerated().map { (alpha: 0.5 + Double($0.offset) * 0.15, dots: $0.element) })
+        }
+        let cols = ["#3B9EFF", "#F29B38", "#FF5A4E", "#2EC4A0", "#A78BFA"]
+        let streaks = (0..<16).map { i in
+            (a: Double(i) / 16 * 2 * .pi + (rnd() - 0.5) * 0.3, sp: 230 + rnd() * 260, len: 6 + rnd() * 9, t0: 0.08 + rnd() * 0.14, col: Color(hex: cols[i % 5]))
+        }
+        return (rings, streaks)
+    }()
+
+    var body: some View {
+        TimelineView(.animation) { timeline in
+            let frame = timeline.date
+            Canvas { ctx, _ in
+                _ = frame
+                guard let start = store.mochi.greetStart else { return }
+                let t = CACurrentMediaTime() - start, cx = center.x, cy = center.y
+                for ring in Self.data.rings {
+                    let k = seg(t, ring.t0, ring.t0 + 1.35)
+                    guard k > 0 && k < 1 else { continue }
+                    let rx = lerp(14, 380, Ease.out(k)), ry = rx * 0.34
+                    let fade = (1 - k) * (k < 0.08 ? k / 0.08 : 1)
+                    for bucket in ring.buckets {
+                        var path = Path()
+                        for d in bucket.dots {
+                            let r = 1 + d.j
+                            path.addRect(CGRect(x: cx + cos(d.a) * rx * r, y: cy + sin(d.a) * ry * r, width: d.s, height: d.s))
+                        }
+                        ctx.fill(path, with: .color(.white.opacity(bucket.alpha * fade)))
+                    }
+                }
+                for s in Self.data.streaks {
+                    let k = seg(t, s.t0, s.t0 + 0.6)
+                    guard k > 0 && k < 1 else { continue }
+                    let dist = s.sp * Ease.out(k) * 0.9 + 10
+                    var line = Path()
+                    line.move(to: CGPoint(x: cx + cos(s.a) * (dist - s.len), y: cy + sin(s.a) * (dist - s.len) * 0.42))
+                    line.addLine(to: CGPoint(x: cx + cos(s.a) * dist, y: cy + sin(s.a) * dist * 0.42))
+                    ctx.stroke(line, with: .color(s.col.opacity(1 - k)), style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
+                }
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 
@@ -209,7 +215,10 @@ struct IslandContent: View {
             header
             Group {
                 switch store.view {
-                case .greeting: Card(wash: .white.opacity(0.06)) { Color.clear }
+                case .greeting:
+                    Card(wash: .white.opacity(0.06)) {
+                        GreetingRings(store: store, center: CGPoint(x: 310, y: 54))
+                    }
                 case .empty: EmptyPanel(store: store)
                 case .overview: OverviewPanel(store: store)
                 case .approval: ApprovalPanel(store: store)
@@ -222,20 +231,21 @@ struct IslandContent: View {
                 }
             }
             .id(store.view)
-            .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.97)).animation(.easeOut(duration: 0.28).delay(0.14)),
-                                    removal: .opacity.animation(.easeIn(duration: 0.12))))
-            .padding(.top, 36)
+            .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .top)).animation(.easeOut(duration: 0.26).delay(0.1)),
+                                    removal: .opacity.animation(.easeIn(duration: 0.1))))
+            .padding(.top, store.cardTop)
             .padding([.horizontal, .bottom], 10)
         }
         .frame(width: Store.expandedWidth, height: store.viewHeight, alignment: .top)
         .opacity(store.mode == .expanded ? 1 : 0)
-        .animation(store.mode == .expanded ? .easeOut(duration: 0.25).delay(0.16) : .easeIn(duration: 0.1), value: store.mode)
+        .animation(store.mode == .expanded ? .easeOut(duration: 0.22).delay(0.06) : .easeIn(duration: 0.1), value: store.mode)
         .allowsHitTesting(store.mode == .expanded)
         .environment(\.colorScheme, .dark)
         .foregroundStyle(Color(hex: "#F5F6F8"))
         .font(.system(size: 13))
     }
 
+    /// Bandeau à hauteur de l'encoche : les éléments restent de part et d'autre de la caméra.
     private var header: some View {
         HStack {
             Text("Encoche").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Color(hex: "#7B8089"))
@@ -253,8 +263,8 @@ struct IslandContent: View {
             .buttonStyle(.plain)
             .help("Son")
         }
-        .padding(.horizontal, 16)
-        .frame(height: 34)
+        .padding(.horizontal, 18)
+        .frame(height: store.notch.height)
     }
 }
 
@@ -578,6 +588,28 @@ private struct ResultPanel: View {
             }
             .padding(.leading, 100)
             .padding(.trailing, 16)
+        }
+    }
+}
+
+/// Compteur d'images par seconde (diagnostic) : ENCOCHE_FPS=1 l'affiche dans la console.
+enum FPS {
+    private static let enabled = ProcessInfo.processInfo.environment["ENCOCHE_FPS"] != nil
+    private static var count = 0
+    private static var since = CACurrentMediaTime()
+    private static var worst = 0.0
+    private static var last = CACurrentMediaTime()
+
+    static func tick() {
+        guard enabled else { return }
+        let now = CACurrentMediaTime()
+        worst = max(worst, now - last)
+        last = now
+        count += 1
+        if now - since >= 1 {
+            print(String(format: "fps %d · pire image %.0f ms", count, worst * 1000))
+            fflush(stdout)
+            count = 0; since = now; worst = 0
         }
     }
 }

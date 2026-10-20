@@ -58,17 +58,25 @@ final class Store: ObservableObject {
     private var slaps: [Date] = []
     private var dizzyUntil: Date?
     private var mochiHoverSince: Date?
+    private var ended = Set<String>()  // sessions fermées : on ignore leurs derniers événements
     private var resultFolder: URL?
     private var createdFiles: [URL] = []
     private var process: Process?
 
     // MARK: Géométrie (repère de l'island, en points)
 
-    static let panelSize = CGSize(width: 760, height: 300)
+    static let panelSize = CGSize(width: 760, height: 320)
     static let expandedWidth = 640.0
+    /// Ouverture : ressort avec léger dépassement (la courbe --spr du prototype).
+    static let openAnimation = Animation.spring(response: 0.48, dampingFraction: 0.74)
+    /// Fermeture : plus courte, sans rebond.
+    static let closeAnimation = Animation.spring(response: 0.34, dampingFraction: 1)
+
+    /// Haut des cartes : juste sous la caméra, quelle que soit la hauteur de l'encoche.
+    var cardTop: Double { notch.height + 4 }
 
     var viewHeight: Double {
-        switch view {
+        let base: Double = switch view {
         case .greeting: 150
         case .overview: 196
         case .empty: 150
@@ -77,6 +85,7 @@ final class Store: ObservableObject {
         case .upload: 176
         case .converting, .result: 150
         }
+        return base + max(0, notch.height - 32)
     }
 
     var islandTarget: CGSize {
@@ -93,14 +102,20 @@ final class Store: ObservableObject {
         case .hidden: return (27, notch.height / 2, 0)
         case .compact: return (27, notch.height / 2, 17)
         case .expanded:
-            let h = viewHeight, mid = 36 + (h - 46) / 2
+            let h = viewHeight, mid = cardTop + (h - cardTop - 10) / 2
             switch view {
-            case .greeting: return (320, 90, 58)
+            case .greeting: return (320, cardTop + 54, 58)
             case .upload: return (140, mid, 50)
             case .converting: return (54, mid, 30)
             default: return (60, mid, 40)
             }
         }
+    }
+
+    /// Centre du Mochi dans le repère du panneau (pour le regard et le survol).
+    var mochiCenterInPanel: CGPoint {
+        let s = islandTarget, m = mochiSlot
+        return CGPoint(x: Self.panelSize.width / 2 - s.width / 2 + m.x, y: m.y)
     }
 
     // MARK: Survol, clics, glisser
@@ -117,7 +132,7 @@ final class Store: ObservableObject {
                 }
             }
         } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                 if !self.hovering && !self.pinned { self.collapse() }
             }
         }
@@ -139,7 +154,7 @@ final class Store: ObservableObject {
             show(.greeting, sound: "greet")
             mochi.startGreeting()
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.4) {
-                if self.view == .greeting && self.mode == .expanded { withAnimation { self.view = self.defaultView } }
+                if self.view == .greeting && self.mode == .expanded { withAnimation(Self.openAnimation) { self.view = self.defaultView } }
             }
         } else {
             show(defaultView)
@@ -148,7 +163,8 @@ final class Store: ObservableObject {
 
     func show(_ v: Panel, sound: String? = "open") {
         let wasExpanded = mode == .expanded
-        withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
+        guard !(wasExpanded && view == v) else { return }
+        withAnimation(Self.openAnimation) {
             view = v
             mode = .expanded
         }
@@ -159,8 +175,10 @@ final class Store: ObservableObject {
     func collapse() {
         let was = mode
         pinUntil = nil
-        withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
-            mode = sessions.isEmpty ? .hidden : .compact
+        let target: Mode = sessions.isEmpty ? .hidden : .compact
+        guard mode != target else { return }
+        withAnimation(Self.closeAnimation) {
+            mode = target
         }
         if was == .expanded { Sound.shared.play("close") }
         mochi.setMouth(0)
@@ -236,7 +254,10 @@ final class Store: ObservableObject {
         let cwd = ev["cwd"] as? String ?? NSHomeDirectory()
         lastActivity = Date()
 
+        if event == "SessionStart" { ended.remove(sid) }
+        guard !ended.contains(sid) else { responder?.close(); return }
         if event == "SessionEnd" {
+            ended.insert(sid)
             sessions.removeAll { $0.id == sid }
             minis[sid] = nil
             for p in permissions where p.session == sid { p.responder.close() }
@@ -317,7 +338,7 @@ final class Store: ObservableObject {
         }
         store(s)
         refreshMochi()
-        if mode == .hidden && !sessions.isEmpty { withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) { mode = .compact } }
+        if mode == .hidden && !sessions.isEmpty { withAnimation(Self.openAnimation) { mode = .compact } }
     }
 
     private func newSession(_ id: String, _ cwd: String) -> Session {
