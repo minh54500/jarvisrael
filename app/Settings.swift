@@ -36,7 +36,7 @@ private struct SettingsView: View {
     @AppStorage("ntfy.topic") private var topic = ""
     @AppStorage("ntfy.away") private var away = true
     @State private var tested = false
-    @AppStorage("launch.on") private var launchOn = false
+    @AppStorage("launch.on") private var launchOn = true
     @AppStorage("launch.volume") private var launchVolume = 0.6
     @AppStorage("launch.name") private var launchName = ""
     @State private var listening = false
@@ -103,10 +103,14 @@ private struct SettingsView: View {
                 Toggle("Jouer une musique quand Encoche démarre", isOn: $launchOn)
                     .disabled(LaunchMusic.file == nil)
                 HStack {
-                    Text(launchName.isEmpty || LaunchMusic.file == nil ? "Aucun fichier choisi" : launchName)
-                        .foregroundStyle(launchName.isEmpty ? .secondary : .primary)
+                    Text(LaunchMusic.custom != nil && !launchName.isEmpty ? launchName
+                         : LaunchMusic.bundled != nil ? "Jingle d'Encoche" : "Aucun fichier choisi")
+                        .foregroundStyle(LaunchMusic.file == nil ? .secondary : .primary)
                         .lineLimit(1).truncationMode(.middle)
                     Spacer()
+                    if LaunchMusic.custom != nil && LaunchMusic.bundled != nil {
+                        Button("Remettre le jingle") { LaunchMusic.reset(); launchName = "" }
+                    }
                     Button("Choisir un fichier…") {
                         if let name = LaunchMusic.choose() { launchName = name; launchOn = true }
                     }
@@ -128,7 +132,8 @@ private struct SettingsView: View {
                     }
                 }
                 .disabled(LaunchMusic.file == nil)
-                Text("MP3, M4A, WAV… Un clic sur le bonhomme coupe la musique.").font(.caption).foregroundStyle(.secondary)
+                Text("MP3, M4A, WAV… Un clic sur le bonhomme coupe la musique. Elle se tait aussi quand les sons sont coupés.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Section("Général") {

@@ -111,7 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // ⌥Espace (au choix dans les réglages) : écrire à Claude ; avec ⇧ : lui dicter.
         HotKey.installSummon()
-        if LaunchMusic.enabled {  // la musique choisie dans les Réglages, et le bonhomme content
+        if LaunchMusic.enabled && Sound.shared.on {  // la musique choisie dans les Réglages, et le bonhomme content
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                 LaunchMusic.play()
                 Store.shared.mochi.emote(.happy, 2.5)
