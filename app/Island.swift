@@ -45,7 +45,7 @@ struct IslandRoot: View {
     var body: some View {
         let size = store.islandTarget
         let flare = store.mode == .hidden ? 0.0 : 14.0
-        let radius = store.mode == .expanded ? 30.0 : store.mode == .compact ? 14.0 : 10.0
+        let radius = store.mode == .expanded ? 30.0 : store.mode == .peek ? 20.0 : store.mode == .compact ? 14.0 : 10.0
         ZStack(alignment: .top) {
             IslandShape(flare: flare, radius: radius)
                 .fill(Color.black)
@@ -53,6 +53,11 @@ struct IslandRoot: View {
             ZStack(alignment: .topLeading) {
                 // Le contenu n'existe que dans l'encoche ouverte : caché mais présent, il continuait
                 // de s'animer (points qui pulsent) et coûtait du CPU en permanence.
+                if store.mode == .peek, let t = store.toast {
+                    PeekView(store: store, toast: t)
+                        .frame(width: size.width, height: size.height, alignment: .bottom)
+                        .transition(.opacity.animation(.easeOut(duration: 0.2).delay(0.08)))
+                }
                 if store.mode == .expanded {
                     IslandContent(store: store)
                         .frame(width: size.width, height: size.height, alignment: .top)
@@ -67,7 +72,7 @@ struct IslandRoot: View {
                         MinisView(store: store, frame: timeline.date)
                             .frame(width: 52, height: store.notch.height)
                             .position(x: size.width - 26, y: store.notch.height / 2)
-                            .opacity(store.mode == .compact ? 1 : 0)
+                            .opacity(store.mode == .compact || store.mode == .peek ? 1 : 0)
                         MochiView(store: store, frame: timeline.date)
                     }
                 }
@@ -113,7 +118,7 @@ struct MinisView: View {
     var body: some View {
         Canvas { [frame] ctx, size in
             _ = frame
-            guard store.mode == .compact else { return }
+            guard store.mode == .compact || store.mode == .peek else { return }
             // Claude suit un plan : son avancement (anneau + « 3/7 ») remplace les mini-bonshommes.
             if let p = store.activePlan {
                 let c = CGPoint(x: 15, y: size.height / 2), r = 6.5
@@ -249,6 +254,84 @@ struct SettingsMenu: View {
     }
 }
 
+// MARK: - Bulles (peek)
+
+/// Pastille ronde : une icône, ou l'initiale de la personne, sur sa couleur.
+struct Avatar: View {
+    let name: String
+    let color: String
+    var icon: String? = nil
+    var size = 22.0
+
+    var body: some View {
+        ZStack {
+            Circle().fill(Color(hex: color))
+            if let icon {
+                Image(systemName: icon).font(.system(size: size * 0.48, weight: .bold)).foregroundStyle(.white)
+            } else {
+                Text(String(name.prefix(1)).uppercased()).font(.system(size: size * 0.5, weight: .bold)).foregroundStyle(.white)
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+/// L'encoche fermée qui s'élargit : « Léo : on se fait une pause ? ». Clic ou survol : on ouvre.
+private struct PeekView: View {
+    @ObservedObject var store: Store
+    let toast: Toast
+
+    var body: some View {
+        Button { store.openToast() } label: {
+            HStack(spacing: 9) {
+                Avatar(name: toast.title, color: toast.color, icon: toast.icon, size: 22)
+                (Text(toast.title).fontWeight(.semibold) + Text("  ") + Text(toast.text).foregroundColor(Color.soft))
+                    .font(Fonts.label)
+                    .foregroundStyle(Color.ink)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold)).foregroundStyle(Color.faint)
+            }
+            .padding(.horizontal, 18)
+            .frame(height: 36)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .environment(\.colorScheme, .dark)
+        .accessibilityLabel("\(toast.title) \(toast.text). Ouvrir")
+    }
+}
+
+/// La même bulle quand l'encoche est déjà ouverte sur autre chose : elle flotte en bas.
+private struct ToastPill: View {
+    @ObservedObject var store: Store
+    let toast: Toast
+
+    var body: some View {
+        Button { store.openToast() } label: {
+            HStack(spacing: 8) {
+                Avatar(name: toast.title, color: toast.color, icon: toast.icon, size: 20)
+                (Text(toast.title).fontWeight(.semibold) + Text("  ") + Text(toast.text).foregroundColor(Color.soft))
+                    .font(Fonts.label)
+                    .foregroundStyle(Color.ink)
+                    .lineLimit(1)
+                    .frame(maxWidth: 360, alignment: .leading)
+            }
+            .padding(.leading, 6)
+            .padding(.trailing, 14)
+            .frame(height: 32)
+            .background(Capsule().fill(Color(hex: "#24262C")))
+            .overlay(Capsule().strokeBorder(.white.opacity(0.1)))
+            .shadow(color: .black.opacity(0.5), radius: 10, y: 4)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(HoverDim())
+        .accessibilityLabel("\(toast.title) \(toast.text). Ouvrir")
+    }
+}
+
 // MARK: - Contenu de l'island ouverte
 
 struct IslandContent: View {
@@ -287,6 +370,14 @@ struct IslandContent: View {
             .padding([.horizontal, .bottom], 10)
         }
         .frame(width: Store.expandedWidth, height: store.viewHeight, alignment: .top)
+        .overlay(alignment: .bottom) {
+            if let t = store.toast {
+                ToastPill(store: store, toast: t)
+                    .padding(.bottom, 18)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.36, dampingFraction: 0.8), value: store.toast)
         .environment(\.colorScheme, .dark)
         .foregroundStyle(Color.ink)
         .font(Fonts.body)
@@ -1627,21 +1718,26 @@ private struct FriendsPanel: View {
     }
 }
 
-/// Chat du groupe : les derniers messages, et le champ pour écrire (Entrée envoie).
+/// Chat du groupe : messages regroupés par personne, l'heure aux pauses, l'état de mes messages,
+/// des réponses rapides quand c'est vide, et le champ (Entrée envoie).
 private struct ChatView: View {
     @ObservedObject var store: Store
     @ObservedObject var friends = Friends.shared
+
+    private static let quick = ["Salut 👋", "Qui code en ce moment ?", "Pause café ?", "Je lance un build 🚀"]
 
     var body: some View {
         VStack(spacing: 6) {
             ScrollViewReader { reader in
                 ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        if friends.chat.isEmpty {
-                            Text("Pas encore de message. Dis bonjour !").font(Fonts.label).foregroundStyle(Color.faint)
-                                .frame(maxWidth: .infinity).padding(.top, 20)
+                    VStack(alignment: .leading, spacing: 2) {
+                        if friends.chat.isEmpty { empty }
+                        ForEach(Array(friends.chat.enumerated()), id: \.element.id) { i, m in
+                            let prev = i > 0 ? friends.chat[i - 1] : nil
+                            let pause = prev.map { m.at.timeIntervalSince($0.at) > 10 * 60 } ?? true
+                            if pause { TimeSeparator(date: m.at) }
+                            ChatRow(message: m, color: color(m), first: pause || prev?.from != m.from)
                         }
-                        ForEach(friends.chat) { m in Bubble(message: m, color: color(m)) }
                         Color.clear.frame(height: 1).id("fin")
                     }
                     .padding(.horizontal, 2)
@@ -1652,55 +1748,120 @@ private struct ChatView: View {
                     friends.markRead()
                 }
             }
-            HStack(spacing: 6) {
-                ComposeField(text: $friends.draft, placeholder: "Écris à tes potes… (Entrée)",
-                             onSubmit: { friends.sendChat() }, onEditing: { store.setComposing($0) })
-                    .frame(height: 18)
-                Button { friends.sendChat() } label: {
-                    Image(systemName: "arrow.up").font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(Color.onLight)
-                        .frame(width: 22, height: 22)
-                        .background(Circle().fill(Color(hex: "#FF8BC4")))
-                }
-                .buttonStyle(.plain)
-                .opacity(friends.draft.trimmingCharacters(in: .whitespaces).isEmpty ? 0.35 : 1)
-                .help("Envoyer (Entrée)")
-                .accessibilityLabel("Envoyer le message")
-            }
-            .padding(.leading, 11)
-            .padding(.trailing, 5)
-            .padding(.vertical, 5)
-            .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(.white.opacity(store.composing ? 0.11 : 0.07)))
+            input
         }
     }
 
-    private func color(_ m: Friends.Message) -> Color {
-        friends.list.first { $0.id == m.from }?.color ?? Color(hex: "#FF9ECF")
+    private var empty: some View {
+        VStack(spacing: 8) {
+            Text("Pas encore de message. Lance la conversation :").font(Fonts.label).foregroundStyle(Color.muted)
+            HStack(spacing: 5) {
+                ForEach(Self.quick, id: \.self) { q in Button(q) { friends.sendChat(q) }.buttonStyle(Chip()) }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 16)
+    }
+
+    private var input: some View {
+        let count = friends.draft.count, empty = friends.draft.trimmingCharacters(in: .whitespaces).isEmpty
+        return HStack(spacing: 6) {
+            ComposeField(text: $friends.draft, placeholder: "Écris à tes potes…",
+                         onSubmit: { friends.sendChat() }, onEditing: { store.setComposing($0) })
+                .frame(height: 18)
+            if count > Friends.chatLimit - 100 {  // on approche de la limite
+                Text("\(Friends.chatLimit - count)").font(Fonts.caption).monospacedDigit()
+                    .foregroundStyle(count > Friends.chatLimit ? Color.danger : Color.faint)
+            }
+            Button { friends.sendChat() } label: {
+                Image(systemName: "arrow.up").font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.onLight)
+                    .frame(width: 22, height: 22)
+                    .background(Circle().fill(Color(hex: "#FF8BC4")))
+            }
+            .buttonStyle(.plain)
+            .opacity(empty ? 0.35 : 1)
+            .disabled(empty)
+            .help("Envoyer (Entrée)")
+            .accessibilityLabel("Envoyer le message")
+        }
+        .padding(.leading, 11)
+        .padding(.trailing, 5)
+        .padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(.white.opacity(store.composing ? 0.11 : 0.07)))
+        .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).stroke(.white.opacity(store.composing ? 0.16 : 0.04)))
+    }
+
+    private func color(_ m: Friends.Message) -> String {
+        let f = friends.list.first { $0.id == m.from }
+        return f?.mochi.tint ?? f?.mochi.skin.aura ?? "#FF8BC4"
     }
 }
 
-private struct Bubble: View {
+/// « Aujourd'hui 14:32 », « Hier 22:10 », « 18 oct. 09:05 » : quand la conversation a fait une pause.
+private struct TimeSeparator: View {
+    let date: Date
+    var body: some View {
+        Text(label).font(Fonts.caption.weight(.medium)).foregroundStyle(Color.faint)
+            .frame(maxWidth: .infinity).padding(.vertical, 5)
+    }
+    private var label: String {
+        let cal = Calendar.current, time = date.formatted(date: .omitted, time: .shortened)
+        if cal.isDateInToday(date) { return "Aujourd'hui \(time)" }
+        if cal.isDateInYesterday(date) { return "Hier \(time)" }
+        return date.formatted(.dateTime.day().month(.abbreviated)) + " " + time
+    }
+}
+
+/// Une bulle. Pour un pote : sa pastille et son nom au premier message d'une série. Pour moi : l'état.
+private struct ChatRow: View {
     let message: Friends.Message
-    let color: Color
+    let color: String
+    let first: Bool
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 6) {
-            if message.mine { Spacer(minLength: 60) }
+            if message.mine {
+                Spacer(minLength: 70)
+            } else {
+                Group {
+                    if first { Avatar(name: message.name, color: color, size: 20) } else { Color.clear.frame(width: 20, height: 1) }
+                }
+                .padding(.bottom, 1)
+            }
             VStack(alignment: message.mine ? .trailing : .leading, spacing: 2) {
-                if !message.mine {
-                    Text(message.name).font(Fonts.caption.weight(.semibold)).foregroundStyle(color)
+                if first && !message.mine {
+                    Text(message.name).font(Fonts.caption.weight(.semibold)).foregroundStyle(Color(hex: color))
                 }
                 Text(message.text)
                     .font(Fonts.label)
                     .foregroundStyle(message.mine ? Color.onLight : Color.ink)
                     .textSelection(.enabled)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
-                    .background(RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(RoundedRectangle(cornerRadius: 13, style: .continuous)
                         .fill(message.mine ? Color(hex: "#FF8BC4") : .white.opacity(0.09)))
+                    .opacity(message.state == "sending" ? 0.6 : 1)
+                if message.mine, let state = message.state, state != "sent" { status(state) }
             }
-            .help(message.at.formatted(date: .omitted, time: .shortened))
-            if !message.mine { Spacer(minLength: 60) }
+            .help(message.at.formatted(date: .abbreviated, time: .shortened))
+            if !message.mine { Spacer(minLength: 70) }
+        }
+        .padding(.top, first ? 5 : 0)
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
+    }
+
+    @ViewBuilder private func status(_ state: String) -> some View {
+        if state == "failed" {
+            Button { Friends.shared.retry(message) } label: {
+                Label("Non envoyé · Réessayer", systemImage: "exclamationmark.circle.fill")
+                    .font(Fonts.caption.weight(.medium)).foregroundStyle(Color.danger)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Message non envoyé, réessayer")
+        } else {
+            Text("Envoi…").font(Fonts.caption).foregroundStyle(Color.faint)
         }
     }
 }

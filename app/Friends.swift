@@ -42,6 +42,8 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         let text: String
         let at: Date
         var mine: Bool
+        /// Mes messages : « sending », « sent » ou « failed » (absent pour ceux des potes).
+        var state: String?
     }
 
     @Published private(set) var list: [Friend] = []
@@ -81,7 +83,10 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
     override init() {
         super.init()
         if let data = UserDefaults.standard.data(forKey: "friends.chat"),
-           let saved = try? JSONDecoder().decode([Message].self, from: data) { chat = saved }
+           let saved = try? JSONDecoder().decode([Message].self, from: data) {
+            // Un envoi coupé par la fermeture de l'app n'est jamais parti.
+            chat = saved.map { var m = $0; if m.state == "sending" { m.state = "failed" }; return m }
+        }
         let ws = NSWorkspace.shared.notificationCenter
         ws.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { Friends.shared.goOffline() }
@@ -159,7 +164,7 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         presence = .off
         presenceSince = Date()
         let done = DispatchSemaphore(value: 0)
-        post(status(), then: { done.signal() })
+        post(status(), then: { _ in done.signal() })
         _ = done.wait(timeout: .now() + 1.5)
         sent = (signature, Date())
     }
@@ -204,14 +209,40 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
 
     // MARK: Chat
 
-    func sendChat() {
-        let text = String(draft.trimmingCharacters(in: .whitespacesAndNewlines).prefix(500))
+    static let chatLimit = 500
+
+    func sendChat(_ quick: String? = nil) {
+        let text = String((quick ?? draft).trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.chatLimit))
         guard configured, !text.isEmpty else { return }
         let id = UUID().uuidString
-        post(["kind": "chat", "text": text, "mid": id])
-        add(Message(id: id, from: me, name: name, text: text, at: Date(), mine: true))
-        draft = ""
+        add(Message(id: id, from: me, name: name, text: text, at: Date(), mine: true, state: "sending"))
+        if quick == nil { draft = "" }
         Sound.shared.play("pop")
+        deliver(id, text)
+    }
+
+    /// Réessayer un message qui n'est pas parti.
+    func retry(_ m: Message) {
+        guard m.mine, m.state == "failed" else { return }
+        setState(m.id, "sending")
+        deliver(m.id, m.text)
+    }
+
+    private func deliver(_ id: String, _ text: String) {
+        post(["kind": "chat", "text": text, "mid": id]) { ok in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    Friends.shared.setState(id, ok ? "sent" : "failed")
+                    if !ok { Sound.shared.play("error") }
+                }
+            }
+        }
+    }
+
+    private func setState(_ id: String, _ state: String) {
+        guard let i = chat.firstIndex(where: { $0.id == id }) else { return }
+        chat[i].state = state
+        saveChat()
     }
 
     func markRead() { if unread != 0 { unread = 0 } }
@@ -228,20 +259,22 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         if let data = try? JSONEncoder().encode(chat) { UserDefaults.standard.set(data, forKey: "friends.chat") }
     }
 
-    private func post(_ fields: [String: Any], then done: (() -> Void)? = nil) {
+    private func post(_ fields: [String: Any], then done: ((Bool) -> Void)? = nil) {
         var payload = fields
         payload["app"] = "encoche"
         payload["v"] = 1
         payload["id"] = me
         payload["name"] = name
         guard let body = try? JSONSerialization.data(withJSONObject: payload), let text = String(data: body, encoding: .utf8),
-              let url = URL(string: Self.server) else { done?(); return }
+              let url = URL(string: Self.server) else { done?(false); return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         // Priorité minimale : si quelqu'un s'abonne au groupe sur son téléphone, ça ne sonne pas.
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["topic": group, "message": text, "priority": 1, "tags": ["encoche"]])
-        URLSession.shared.dataTask(with: req) { _, _, _ in done?() }.resume()
+        URLSession.shared.dataTask(with: req) { _, response, error in
+            done?(error == nil && (response as? HTTPURLResponse)?.statusCode == 200)
+        }.resume()
     }
 
     // MARK: Ce que je reçois (flux ntfy : une ligne JSON par message)
@@ -316,8 +349,7 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         case "poke":
             guard m["to"] as? String == me, fresh else { return }
             let heart = m["emote"] as? String == "heart"
-            say(heart ? "\(who) t'envoie un cœur" : "\(who) te fait coucou")
-            Store.shared.poked(heart: heart)
+            Store.shared.poked(heart: heart, from: who)
         case "chat":
             guard let body = m["text"] as? String, !body.isEmpty else { return }
             let mid = m["mid"] as? String ?? ev["id"] as? String ?? UUID().uuidString
@@ -325,7 +357,8 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
             add(Message(id: mid, from: id, name: who, text: String(body.prefix(500)), at: at, mine: false))
             if fresh && !Store.shared.chatVisible {
                 unread += 1
-                Store.shared.chatReceived(from: who, text: body)
+                let f = list.first { $0.id == id }
+                Store.shared.chatReceived(from: who, color: f?.mochi.tint ?? f?.mochi.skin.aura ?? "#FF8BC4", text: body)
             }
         default:
             break

@@ -110,7 +110,18 @@ struct Permission: Identifiable {
     let at = Date()
 }
 
-enum Mode { case hidden, compact, expanded }
+/// peek : l'encoche s'élargit un instant pour une bulle (message d'un pote…), sans s'ouvrir.
+enum Mode { case hidden, compact, peek, expanded }
+
+/// Bulle de notification : qui (couleur, initiale ou icône), quoi, et le panneau qu'un clic ouvre.
+struct Toast: Equatable {
+    let id = UUID()
+    var icon: String?      // symbole ; sinon l'initiale de `title`
+    var color: String
+    var title: String
+    var text: String
+    var opensChat = false
+}
 enum Panel: Equatable { case greeting, overview, empty, approval, finished, error, upload, choose, converting, result, shelf, music, dev, care, todos, friends }
 
 private let PALETTE = ["#FF6B5B", "#2DD4A7", "#F7B32B", "#A78BFA", "#38BDF8", "#F472B6"]
@@ -201,6 +212,7 @@ final class Store: ObservableObject {
         switch mode {
         case .hidden: notch
         case .compact: CGSize(width: notch.width + 104, height: notch.height)
+        case .peek: CGSize(width: max(notch.width + 260, 440), height: notch.height + 36)
         case .expanded: CGSize(width: Self.expandedWidth, height: viewHeight)
         }
     }
@@ -209,7 +221,7 @@ final class Store: ObservableObject {
     var mochiSlot: (x: Double, y: Double, hb: Double) {
         switch mode {
         case .hidden: return (27, notch.height / 2, 0)
-        case .compact: return (27, notch.height / 2, 17)
+        case .compact, .peek: return (27, notch.height / 2, 17)
         case .expanded:
             let h = viewHeight, mid = cardTop + (h - cardTop - 10) / 2
             switch view {
@@ -237,7 +249,7 @@ final class Store: ObservableObject {
             if mode != .expanded {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
                     guard self.hovering, self.mode != .expanded else { return }
-                    self.expandDefault()
+                    if self.mode == .peek { self.openToast() } else { self.expandDefault() }
                 }
             }
         } else {
@@ -341,6 +353,7 @@ final class Store: ObservableObject {
     func collapse() {
         let was = mode
         pinUntil = nil
+        toast = nil
         wantsFocus = false
         if composing { setComposing(false) }
         let target: Mode = sessions.isEmpty ? .hidden : .compact
@@ -1116,23 +1129,44 @@ final class Store: ObservableObject {
         objectWillChange.send()
     }
 
+    // MARK: Bulles (peek)
+
+    @Published var toast: Toast?
+
+    /// Encoche fermée : elle s'élargit en bulle 4 s. Ouverte : la bulle flotte en bas de l'encoche.
+    func showToast(_ t: Toast) {
+        toast = t
+        if mode != .expanded { withAnimation(Self.openAnimation) { mode = .peek } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) {
+            guard self.toast?.id == t.id else { return }
+            self.hideToast()
+        }
+    }
+
+    func hideToast() {
+        toast = nil
+        if mode == .peek { withAnimation(Self.closeAnimation) { mode = sessions.isEmpty ? .hidden : .compact } }
+    }
+
+    /// Clic (ou survol) sur la bulle : on ouvre ce dont elle parle.
+    func openToast() {
+        guard let t = toast else { return }
+        toast = nil
+        if t.opensChat { friendsShowsChat = true; Friends.shared.markRead() }
+        show(t.opensChat ? .friends : defaultView)
+    }
+
     /// Onglet Potes : les bonshommes, ou le chat.
     @Published var friendsShowsChat = false
 
     var chatVisible: Bool { mode == .expanded && view == .friends && friendsShowsChat }
 
     /// Un message d'un pote : le bonhomme réagit, et le chat s'ouvre si on n'est pas occupé.
-    func chatReceived(from name: String, text: String) {
+    func chatReceived(from name: String, color: String, text: String) {
         Sound.shared.play("question")
         mochi.emote(.happy, 1.5)
         Phone.notify("Message de \(name)", text, tag: "speech_balloon")
-        guard !busy else { return }
-        friendsShowsChat = true
-        show(.friends, sound: nil)
-        pinUntil = Date().addingTimeInterval(5)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5.2) {
-            if self.view == .friends && !self.hovering && !self.composing { self.collapse() }
-        }
+        showToast(Toast(icon: nil, color: color, title: name, text: text, opensChat: true))
     }
 
     /// Change le skin du bonhomme (et des mini-bonshommes des sessions).
@@ -1164,15 +1198,11 @@ final class Store: ObservableObject {
     }
 
     /// Un pote m'envoie un cœur ou un coucou : le bonhomme réagit, et l'onglet Potes s'ouvre si on n'est pas occupé.
-    func poked(heart: Bool) {
+    func poked(heart: Bool, from name: String) {
         mochi.emote(heart ? .love : .wink, 2.2)
         Sound.shared.play(heart ? "love" : "peek")
-        guard !busy else { return }
-        show(.friends, sound: nil)
-        pinUntil = Date().addingTimeInterval(4)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.2) {
-            if self.view == .friends && !self.hovering { self.collapse() }
-        }
+        showToast(Toast(icon: heart ? "heart.fill" : "hand.wave.fill", color: heart ? "#FF5C8A" : "#F7B32B",
+                        title: name, text: heart ? "t'envoie un cœur" : "te fait coucou"))
     }
 
     /// On écrit, on autorise, on dépose un fichier… : pas le moment d'ouvrir autre chose.
