@@ -15,6 +15,11 @@ final class Care {
         set { UserDefaults.standard.set(newValue, forKey: "care"); reset() }
     }
 
+    // Réglages (fenêtre Réglages) : chaque rappel se coupe à part, les durées se choisissent.
+    private func on(_ key: String) -> Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
+    var pauseMinutes: Int { UserDefaults.standard.object(forKey: "care.pauseMin") as? Int ?? 50 }
+    var waterMinutes: Int { UserDefaults.standard.object(forKey: "care.waterMin") as? Int ?? 90 }
+
     private var activeSince = Date()
     private var lastWater = Date()
     private var nightShown = Date.distantPast
@@ -31,7 +36,7 @@ final class Care {
     }
 
     /// « Plus tard » : la pause revient dans 10 minutes.
-    func snooze() { activeSince = Date().addingTimeInterval(-40 * 60) }
+    func snooze() { activeSince = Date().addingTimeInterval(-Double(max(0, pauseMinutes - 10)) * 60) }
 
     private func reset() {
         activeSince = Date()
@@ -47,18 +52,21 @@ final class Care {
         guard idle < 60 else { return }  // personne devant l'écran : on ne dit rien
 
         let health = DevMonitor.shared.sample()
-        if let b = health.battery {
+        if on("care.health"), let b = health.battery {
             if health.charging { batteryWarned = false }
             if b <= 15 && !health.charging && !batteryWarned, Store.shared.remind(.battery(b)) { batteryWarned = true; return }
         }
-        if health.thermal == .serious || health.thermal == .critical, now.timeIntervalSince(heatWarned) > 30 * 60,
+        if on("care.health"), health.thermal == .serious || health.thermal == .critical, now.timeIntervalSince(heatWarned) > 30 * 60,
            Store.shared.remind(.heat) { heatWarned = now; return }
 
         let hour = Calendar.current.component(.hour, from: now)
-        if (1..<5).contains(hour), now.timeIntervalSince(nightShown) > 12 * 3600,
+        if on("care.night"), (1..<5).contains(hour), now.timeIntervalSince(nightShown) > 12 * 3600,
            Store.shared.remind(.night(hour)) { nightShown = now; return }
 
-        if now.timeIntervalSince(activeSince) >= 50 * 60, Store.shared.remind(.pause) { activeSince = now; return }
-        if now.timeIntervalSince(lastWater) >= 90 * 60, Store.shared.remind(.water) { lastWater = now }
+        if on("care.pause"), now.timeIntervalSince(activeSince) >= Double(pauseMinutes) * 60, Store.shared.remind(.pause) {
+            activeSince = now
+            return
+        }
+        if on("care.water"), now.timeIntervalSince(lastWater) >= Double(waterMinutes) * 60, Store.shared.remind(.water) { lastWater = now }
     }
 }

@@ -358,9 +358,11 @@ final class Mochi {
         let body = pebblePath(hw, hh)
         let (c0, c1) = palette
         if !mini {  // lueur douce autour du galet
-            var aura = b
-            aura.addFilter(.blur(radius: hh * 0.2))
-            aura.fill(body, with: .color(AURA.color(0.8 * greet.halo)))
+            // Traits de plus en plus fins et opaques autour du contour : une lueur sans flou
+            // (un flou recalculé 30 fois par seconde coûtait plus que tout le reste du dessin).
+            for (w, a) in [(0.62, 0.07), (0.44, 0.1), (0.28, 0.14), (0.14, 0.2)] {
+                b.stroke(body, with: .color(AURA.color(a * greet.halo)), style: StrokeStyle(lineWidth: hh * w, lineJoin: .round))
+            }
         }
         b.fill(body, with: .linearGradient(Gradient(colors: [c0.color(), c1.color()]),
                                            startPoint: CGPoint(x: 0, y: -hh), endPoint: CGPoint(x: 0, y: hh)))
@@ -400,16 +402,19 @@ final class Mochi {
             let f = (s.roll / (2 * .pi)).truncatingRemainder(dividingBy: 1)
             ly += f < 0.5 ? f * 2 * hh * 1.5 : -(1 - f) * 2 * hh * 1.5
         }
-        if !mini {  // halo cyan des yeux
-            var glow = inner
-            glow.addFilter(.blur(radius: er * 0.7))
-            for _ in 0..<2 {  // deux passes : la lueur se voit sur le rose
-                for sd in [-1.0, 1.0] { drawEye(glow, shape, x: sd * sp + lx, y: ly, er: er, side: sd, color: EYE_GLOW) }
+        if !mini {  // halo cyan des yeux : le même œil, plus grand et transparent, deux fois
+            for (k, a) in [(1.7, 0.16), (1.3, 0.3)] {
+                for sd in [-1.0, 1.0] {
+                    drawEye(inner, shape, x: sd * sp + lx, y: ly, er: er * k, side: sd, color: EYE_GLOW.opacity(a))
+                }
             }
         }
         for sd in [-1.0, 1.0] {
             drawEye(inner, shape, x: sd * sp + lx, y: ly, er: er, side: sd, color: mini ? INK : EYE)
         }
+
+        drawPayot(b, hw: hw, hh: hh)
+        drawKippah(b, hw: hw, hh: hh)
 
         // badge
         if let badge, s.badgeS > 0.01 {
@@ -465,6 +470,45 @@ final class Mochi {
                 pc.draw(Text("z").font(.system(size: sz * 1.9, weight: .bold)).foregroundColor(Color(hex: "#D2DCEB")), at: .zero)
             }
         }
+    }
+
+    /// Papillotes : deux boucles sombres qui ondulent le long des côtés (pas sur les mini, trop fines).
+    private func drawPayot(_ ctx: GraphicsContext, hw: Double, hh: Double) {
+        guard !mini else { return }
+        let sway = sin(now * 1.6) * 0.04  // elles bougent un peu avec le temps
+        for side in [-1.0, 1.0] {
+            var p = Path()
+            for i in 0...40 {
+                let t = Double(i) / 40, y = lerp(-0.42, 0.98, t) * hh
+                let x = side * hw * (0.99 + 0.035 * t + sin(t * .pi * 3.4 + side * 0.4) * (0.075 + sway * t))
+                i == 0 ? p.move(to: CGPoint(x: x, y: y)) : p.addLine(to: CGPoint(x: x, y: y))
+            }
+            ctx.stroke(p, with: .color(Color(hex: "#24285E")), style: StrokeStyle(lineWidth: max(1, hh * 0.09), lineCap: .round, lineJoin: .round))
+        }
+    }
+
+    /// Kippa blanche posée sur le haut du galet, étoile de David bleue au milieu.
+    private func drawKippah(_ ctx: GraphicsContext, hw: Double, hh: Double) {
+        let kw = hw * 0.5, kh = hh * 0.44, kb = -hh * 0.8
+        var cap = Path()
+        cap.move(to: CGPoint(x: -kw, y: kb))
+        cap.addCurve(to: CGPoint(x: kw, y: kb), control1: CGPoint(x: -kw * 0.95, y: kb - kh * 1.32), control2: CGPoint(x: kw * 0.95, y: kb - kh * 1.32))
+        cap.addQuadCurve(to: CGPoint(x: -kw, y: kb), control: CGPoint(x: 0, y: kb + kh * 0.28))  // le bord suit la tête
+        cap.closeSubpath()
+        ctx.fill(cap, with: .linearGradient(Gradient(colors: [Color(hex: "#FFFFFF"), Color(hex: "#DCEBFA")]),
+                                            startPoint: CGPoint(x: 0, y: kb - kh), endPoint: CGPoint(x: 0, y: kb)))
+        guard hh > 6 else { return }  // trop petit pour l'étoile
+        let r = kh * 0.34, cy = kb - kh * 0.5
+        var star = Path()
+        for base in [-Double.pi / 2, Double.pi / 2] {  // deux triangles, pointe en haut puis en bas
+            for k in 0..<3 {
+                let a = base + Double(k) * 2 * .pi / 3
+                let pt = CGPoint(x: cos(a) * r, y: cy + sin(a) * r)
+                k == 0 ? star.move(to: pt) : star.addLine(to: pt)
+            }
+            star.closeSubpath()
+        }
+        ctx.stroke(star, with: .color(Color(hex: "#2F5BD3")), style: StrokeStyle(lineWidth: max(0.6, r * 0.22), lineJoin: .round))
     }
 
     /// Haut et bas du corps : le galet néon, ou la couleur de la session pour les mini.

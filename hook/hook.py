@@ -9,6 +9,8 @@ Si l'app ne tourne pas, le script ne dit rien et Claude Code se comporte normale
   hook.py --install    branche Encoche dans ~/.claude/settings.json (avec sauvegarde)
   hook.py --uninstall  le débranche
   hook.py --status     dit s'il est branché
+  hook.py --model ID   règle le modèle des nouvelles sessions (« default » : celui de Claude Code)
+  hook.py --get-model  affiche ce réglage
 """
 import json
 import os
@@ -143,11 +145,25 @@ def relay():
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": out}}))
 
 
+def model(value):
+    data = load_settings()
+    if value in ("", "default"):
+        data.pop("model", None)
+    else:
+        data["model"] = value
+    save_settings(data)
+    print(value or "default")
+
+
 if __name__ == "__main__":
     flag = sys.argv[1] if len(sys.argv) > 1 else ""
     try:
         if flag in ("--install", "--uninstall", "--status"):
             manage(flag)
+        elif flag == "--model":
+            model(sys.argv[2] if len(sys.argv) > 2 else "")
+        elif flag == "--get-model":
+            print(load_settings().get("model", ""))
         else:
             relay()
     except Exception as e:

@@ -51,10 +51,17 @@ struct IslandRoot: View {
                 .fill(Color.black)
                 .frame(width: size.width + 2 * flare, height: size.height)
             ZStack(alignment: .topLeading) {
-                IslandContent(store: store)
-                    .frame(width: size.width, height: size.height, alignment: .top)
-                // Un seul minuteur pour tous les personnages : 60 images/s ouverte, 30 en compact.
-                TimelineView(.animation(minimumInterval: store.mode == .expanded ? nil : 1.0 / 30,
+                // Le contenu n'existe que dans l'encoche ouverte : caché mais présent, il continuait
+                // de s'animer (points qui pulsent) et coûtait du CPU en permanence.
+                if store.mode == .expanded {
+                    IslandContent(store: store)
+                        .frame(width: size.width, height: size.height, alignment: .top)
+                        .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.22).delay(0.06)),
+                                                removal: .opacity.animation(.easeIn(duration: 0.1))))
+                }
+                // Un seul minuteur pour tous les personnages : 60 images/s ouverte, 20 en compact
+                // (le bonhomme y fait 17 points : plus d'images ne se voient pas, mais se paient en CPU).
+                TimelineView(.animation(minimumInterval: store.mode == .expanded ? nil : 1.0 / 20,
                                         paused: store.mode == .hidden && store.mochiSlot.hb < 0.5)) { timeline in
                     ZStack(alignment: .topLeading) {
                         MinisView(store: store, frame: timeline.date)
@@ -207,6 +214,7 @@ struct SettingsMenu: View {
         }
         Text("⌥Espace : écrire à Claude · ⌥⇧Espace : lui dicter")
         Divider()
+        Button("Réglages…") { SettingsWindow.show() }
         Button("Quitter Encoche") { NSApp.terminate(nil) }
     }
 }
@@ -247,9 +255,6 @@ struct IslandContent: View {
             .padding([.horizontal, .bottom], 10)
         }
         .frame(width: Store.expandedWidth, height: store.viewHeight, alignment: .top)
-        .opacity(store.mode == .expanded ? 1 : 0)
-        .animation(store.mode == .expanded ? .easeOut(duration: 0.22).delay(0.06) : .easeIn(duration: 0.1), value: store.mode)
-        .allowsHitTesting(store.mode == .expanded)
         .environment(\.colorScheme, .dark)
         .foregroundStyle(Color.ink)
         .font(Fonts.body)
@@ -279,6 +284,10 @@ struct IslandContent: View {
             }
             .buttonStyle(IconButton())
             .help(Sound.shared.on ? "Couper le son" : "Activer le son")
+            Button { SettingsWindow.show() } label: { Image(systemName: "gearshape.fill").font(.system(size: 11.5, weight: .semibold)) }
+                .buttonStyle(IconButton())
+                .help("Réglages")
+                .accessibilityLabel("Réglages")
             .accessibilityLabel(Sound.shared.on ? "Couper le son" : "Activer le son")
         }
         .padding(.horizontal, 12)
@@ -578,17 +587,30 @@ private struct ModelMenu: View {
 
     var body: some View {
         let current = store.focused?.model ?? ""
+        let shown = current.isEmpty ? store.defaultModel : current
+        let vscode = store.focused?.entrypoint == "claude-vscode"
         Menu {
-            Section(store.focused.map { "Modèle de \($0.name)" } ?? "Modèle") {
-                ForEach(ClaudeModel.all) { m in
-                    Button { store.setModel(m) } label: {
-                        if m.arg == current { Label(m.name, systemImage: "checkmark") } else { Text(m.name) }
+            // Terminal : `/model nom` change la session. VS Code : son choix de modèle est une action de
+            // son interface, on ouvre donc la session pour le faire là-bas.
+            if let s = store.focused, !vscode {
+                Section("Cette session (\(s.name))") {
+                    ForEach(ClaudeModel.all) { m in
+                        Button { store.setModel(m) } label: { check(m.name, m.arg == current) }
                     }
                 }
             }
+            Section("Nouvelles sessions") {
+                ForEach(ClaudeModel.all) { m in
+                    Button { store.setDefaultModel(m) } label: { check(m.name, isDefault(m)) }
+                }
+            }
+            if let s = store.focused, vscode {
+                Divider()
+                Button("Changer celle-ci dans VS Code (/model)…") { store.jump(to: s) }
+            }
         } label: {
             HStack(spacing: 3) {
-                Text(current.isEmpty ? "Modèle" : ClaudeModel.label(current)).lineLimit(1)
+                Text(shown.isEmpty ? "Modèle" : ClaudeModel.label(shown)).lineLimit(1)
                 Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
             }
             .font(Fonts.caption.weight(.medium))
@@ -604,8 +626,18 @@ private struct ModelMenu: View {
         .fixedSize()
         .disabled(store.focused == nil || store.sending)
         .onHover { hover = $0 }
-        .help("Changer le modèle de Claude pour cette session")
-        .accessibilityLabel("Modèle : \(current.isEmpty ? "inconnu" : ClaudeModel.label(current))")
+        .help("Modèle de Claude : cette session, ou les nouvelles")
+        .accessibilityLabel("Modèle : \(shown.isEmpty ? "inconnu" : ClaudeModel.label(shown))")
+    }
+
+    @ViewBuilder private func check(_ name: String, _ on: Bool) -> some View {
+        if on { Label(name, systemImage: "checkmark") } else { Text(name) }
+    }
+
+    /// Le réglage peut être un nom court (« opus ») ou complet (« claude-opus-5-5 »).
+    private func isDefault(_ m: ClaudeModel) -> Bool {
+        let d = store.defaultModel.lowercased()
+        return !d.isEmpty && (m.arg == d || m.arg.contains("-\(d)-"))
     }
 }
 
@@ -899,7 +931,8 @@ private struct ClipItem: View {
         .onDrag {
             store.startDragOut()
             if let t = clip.text { return NSItemProvider(object: t as NSString) }
-            return clip.image.map { NSItemProvider(object: $0) } ?? NSItemProvider()
+            if let png = clip.png { return NSItemProvider(item: png as NSData, typeIdentifier: "public.png") }
+            return NSItemProvider()
         }
         .contextMenu {
             Button("Copier") { ClipHistory.shared.copy(clip) }
@@ -1309,6 +1342,9 @@ private struct ApprovalPanel: View {
                         if store.permissions.count > 1 {
                             Text("+\(store.permissions.count - 1) en attente").font(Fonts.caption).foregroundStyle(Color.muted)
                         }
+                        Spacer(minLength: 4)
+                        Text("⌥⇧Y · ⌥⇧N").font(Fonts.caption).foregroundStyle(Color.faint)
+                            .help("⌥⇧Y autoriser, ⌥⇧N refuser, depuis n'importe quelle app")
                     }
                 }
                 .padding(.leading, 100)
@@ -1339,25 +1375,35 @@ private struct FinishedPanel: View {
     }
 }
 
-/// « 4 fichiers en 6 min · +120 −34 » et les fichiers, à ouvrir d'un clic dans VS Code.
+/// « 4 fichiers en 6 min · +120 −34 · 12k tokens · contexte 84k », puis les fichiers à ouvrir dans VS Code.
 private struct TurnSummary: View {
     let turn: Turn
 
     var body: some View {
-        HStack(spacing: 6) {
-            Text(turn.text).foregroundStyle(Color.muted)
-            if let a = turn.added, let r = turn.removed, a + r > 0 {
-                (Text("+\(a) ").foregroundColor(.success) + Text("−\(r)").foregroundColor(.danger))
-                    .monospacedDigit()
-                    .help("Lignes modifiées dans ces fichiers depuis le dernier commit")
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(turn.text).foregroundStyle(Color.muted)
+                if let a = turn.added, let r = turn.removed, a + r > 0 {
+                    (Text("+\(a) ").foregroundColor(.success) + Text("−\(r)").foregroundColor(.danger))
+                        .monospacedDigit()
+                        .help("Lignes modifiées dans ces fichiers depuis le dernier commit")
+                }
+                if let t = turn.tokens {
+                    Text("· " + t).foregroundStyle(Color.faint)
+                        .help("Tokens écrits par Claude pendant la demande · taille du contexte qu'il relit à chaque message")
+                }
             }
-            ForEach(turn.files.prefix(3), id: \.self) { path in
-                Button(URL(fileURLWithPath: path).lastPathComponent) { open(path) }
-                    .buttonStyle(Chip())
-                    .frame(maxWidth: 120)
-                    .help("Ouvrir \(path) dans VS Code")
+            if !turn.files.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(turn.files.prefix(4), id: \.self) { path in
+                        Button(URL(fileURLWithPath: path).lastPathComponent) { open(path) }
+                            .buttonStyle(Chip())
+                            .frame(maxWidth: 120)
+                            .help("Ouvrir \(path) dans VS Code")
+                    }
+                    if turn.files.count > 4 { Text("+\(turn.files.count - 4)").foregroundStyle(Color.muted) }
+                }
             }
-            if turn.files.count > 3 { Text("+\(turn.files.count - 3)").foregroundStyle(Color.muted) }
         }
         .font(Fonts.label)
         .lineLimit(1)

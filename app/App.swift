@@ -51,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var timer: Timer?
     private var wasPressed = false
     private var dragCount = 0
+    private var tick = 0
     /// Empêche App Nap : sans ça, macOS endort l'app (pas de fenêtre au premier plan)
     /// et l'animation tombe à quelques images par seconde.
     private var noNap: NSObjectProtocol?
@@ -108,9 +109,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // ⌥Espace : écrire à Claude ; ⌥⇧Espace : lui dicter.
-        HotKey.register(id: 1, key: kVK_Space, modifiers: optionKey) { MainActor.assumeIsolated { Store.shared.summon(dictate: false) } }
-        HotKey.register(id: 2, key: kVK_Space, modifiers: optionKey | shiftKey) { MainActor.assumeIsolated { Store.shared.summon(dictate: true) } }
+        // ⌥Espace (au choix dans les réglages) : écrire à Claude ; avec ⇧ : lui dicter.
+        HotKey.installSummon()
+        store.cleanCaptures()
+        NSApp.mainMenu = editMenu()  // ⌘C, ⌘V… dans les champs de la fenêtre Réglages
         _ = ClipHistory.shared  // l'historique du presse-papiers commence maintenant
         Care.shared.start()
 
@@ -128,6 +130,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.place()
             }
         }
+    }
+
+    /// L'app n'a pas de barre de menus, mais ses raccourcis d'édition passent par le menu principal.
+    private func editMenu() -> NSMenu {
+        let main = NSMenu(), item = NSMenuItem(), edit = NSMenu(title: "Édition")
+        edit.addItem(withTitle: "Annuler", action: Selector(("undo:")), keyEquivalent: "z")
+        edit.addItem(withTitle: "Rétablir", action: Selector(("redo:")), keyEquivalent: "Z")
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Couper", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copier", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Coller", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Tout sélectionner", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.addItem(withTitle: "Fermer la fenêtre", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        item.submenu = edit
+        main.addItem(item)
+        return main
     }
 
     private static var notchScreen: NSScreen {
@@ -150,6 +168,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Suivi de la souris (60 fois par seconde) : survol, regard du Mochi, fichiers glissés vers l'encoche.
     @MainActor private func track() {
         let store = Store.shared
+        tick += 1
+        if store.mode != .expanded && tick % 2 == 1 && NSEvent.pressedMouseButtons == 0 { return }  // 30 fois/s fermée suffit
         let m = NSEvent.mouseLocation, f = panel.frame
         let p = CGPoint(x: m.x - f.minX, y: f.maxY - m.y)
         let target = store.islandTarget

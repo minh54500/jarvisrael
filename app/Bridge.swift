@@ -102,11 +102,11 @@ final class Bridge {
 
     /// Lance hook.py --install / --uninstall / --status ; renvoie sa sortie.
     @discardableResult
-    static func runHookTool(_ flag: String) -> (ok: Bool, output: String) {
+    static func runHookTool(_ args: String...) -> (ok: Bool, output: String) {
         installHookScript()
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        p.arguments = [hookScript.path, flag]
+        p.arguments = [hookScript.path] + args
         let pipe = Pipe()
         p.standardOutput = pipe
         p.standardError = pipe

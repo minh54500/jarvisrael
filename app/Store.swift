@@ -16,6 +16,8 @@ struct Session: Identifiable {
     var message = ""
     var model = ""  // "claude-opus-5-5"… annoncé par Claude Code au démarrage de la session
     var turnStart: Date?    // début de la demande en cours
+    var transcript = ""     // historique JSONL de la session (Claude Code), pour compter les tokens
+    var transcriptOffset: UInt64 = 0  // sa taille au début de la demande
     var touched: [String] = []  // fichiers modifiés pendant cette demande
     var turn: Turn?         // bilan de la dernière demande terminée
 }
@@ -26,6 +28,19 @@ struct Turn {
     var seconds: Double
     var added: Int?
     var removed: Int?
+    var output: Int?   // tokens écrits par Claude pendant la demande
+    var context: Int?  // taille du contexte à la fin (tout ce que Claude relit à chaque message)
+
+    var tokens: String? {
+        guard let output else { return nil }
+        let ctx = context.map { " · contexte \(Turn.short($0))" } ?? ""
+        return "\(Turn.short(output)) tokens\(ctx)"
+    }
+
+    static func short(_ n: Int) -> String {
+        n >= 1_000_000 ? String(format: "%.1fM", Double(n) / 1_000_000)
+            : n >= 10_000 ? "\(n / 1000)k" : n >= 1000 ? String(format: "%.1fk", Double(n) / 1000) : "\(n)"
+    }
 
     var text: String {
         let d = seconds < 60 ? "\(max(1, Int(seconds))) s" : "\(Int((seconds / 60).rounded())) min"
@@ -84,7 +99,9 @@ final class Store: ObservableObject {
     @Published var view: Panel = .empty
     @Published var sessions: [Session] = []
     @Published var focus: String?
-    @Published var permissions: [Permission] = []
+    @Published var permissions: [Permission] = [] {
+        didSet { if permissions.isEmpty != oldValue.isEmpty { HotKey.approvalKeys(!permissions.isEmpty) } }
+    }
     @Published var files: [URL] = []
     @Published var progress = 0.0
     @Published var progressLabel = ""
@@ -144,7 +161,7 @@ final class Store: ObservableObject {
         case .overview: 226
         case .empty: 150
         case .approval: 206
-        case .finished: (focused?.turn?.files.isEmpty ?? true) ? 176 : 206
+        case .finished: focused?.turn == nil ? 176 : (focused?.turn?.files.isEmpty ?? true) ? 196 : 226
         case .error, .choose: 176
         case .dev: 206
         case .care: 164
@@ -439,6 +456,33 @@ final class Store: ObservableObject {
     }
 
     /// Change le modèle de la session choisie : `/model …` lui est envoyé comme un message.
+    /// Modèle des nouvelles sessions (« model » de ~/.claude/settings.json ; vide = celui de Claude Code).
+    @Published var defaultModel = ""
+
+    func loadDefaultModel() {
+        DispatchQueue.global().async {
+            let m = Bridge.runHookTool("--get-model").output
+            DispatchQueue.main.async { MainActor.assumeIsolated { Store.shared.defaultModel = m } }
+        }
+    }
+
+    /// Les nouvelles sessions (terminal et VS Code) utiliseront ce modèle.
+    func setDefaultModel(_ m: ClaudeModel) {
+        DispatchQueue.global().async {
+            let r = Bridge.runHookTool("--model", m.arg)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let store = Store.shared
+                    if r.ok { store.defaultModel = m.arg }
+                    Sound.shared.play(r.ok ? "approve" : "error")
+                    store.say(r.ok ? "Nouvelles sessions : \(m.name) ✓" : "Réglage impossible : \(r.output)", ok: r.ok, for: 4)
+                }
+            }
+        }
+    }
+
+    /// Session du terminal : `/model …` lui est envoyé. (L'extension VS Code n'accepte pas `/model nom` :
+    /// son choix de modèle est une action de son interface. Voir ModelMenu.)
     func setModel(_ m: ClaudeModel) {
         guard let s = focused, s.model != m.arg else { return }
         deliver("/model \(m.arg)", to: s) { copied in
@@ -479,7 +523,9 @@ final class Store: ObservableObject {
 
     /// Prompts favoris : un clic les envoie à la session choisie.
     @Published var favorites: [String] = UserDefaults.standard.stringArray(forKey: "favorites")
-        ?? ["Continue", "Corrige les erreurs", "Lance les tests", "Fais le commit"]
+        ?? ["Continue", "Corrige les erreurs", "Lance les tests", "Fais le commit"] {
+        didSet { UserDefaults.standard.set(favorites, forKey: "favorites") }
+    }
 
     func sendFavorite(_ text: String) {
         guard let s = focused else { return }
@@ -684,6 +730,10 @@ final class Store: ObservableObject {
         case "UserPromptSubmit":
             s.state = .working
             s.turnStart = Date()
+            if let path = ev["transcript_path"] as? String {
+                s.transcript = path
+                s.transcriptOffset = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? UInt64) ?? 0
+            }
             s.touched = []
             s.turn = nil
             s.line = "« \(short(ev["prompt"] as? String ?? "", 70)) »"
@@ -712,6 +762,7 @@ final class Store: ObservableObject {
             if draft.isEmpty && !sending { focus = sid }  // pas de changement de destinataire en pleine écriture
             store(s)
             alert(.approval, state: .approval)
+            Phone.notify("Claude attend ton autorisation", "\(s.name) : \(title)", tag: "raising_hand")
             // Claude Code abandonne le hook après 120 s : on retire la demande avant.
             let id = permissions.last!.id
             DispatchQueue.main.asyncAfter(deadline: .now() + 117) { self.expire(id) }
@@ -722,6 +773,7 @@ final class Store: ObservableObject {
                 s.state = .waiting
                 s.line = ev["message"] as? String ?? "Claude attend ta réponse"
                 Sound.shared.play("question")
+                Phone.notify("Claude attend ta réponse", s.name, tag: "speech_balloon")
             }
         case "Stop":
             s.state = .finished
@@ -732,6 +784,8 @@ final class Store: ObservableObject {
                 s.turnStart = nil
                 s.line = "Terminé : " + turn.text
                 if !turn.files.isEmpty { countLines(sid, cwd: s.cwd, files: turn.files) }
+                if !s.transcript.isEmpty { countTokens(sid, path: s.transcript, from: s.transcriptOffset) }
+                Phone.notify("Claude a terminé", "\(s.name) : \(turn.text)", tag: "white_check_mark")
             }
             if draft.isEmpty && !sending { focus = sid }  // pas de changement de destinataire en pleine écriture
             store(s)
@@ -751,6 +805,7 @@ final class Store: ObservableObject {
             store(s)
             alert(.error, state: .error)
             pinUntil = Date().addingTimeInterval(8)
+            Phone.notify("Claude s'est arrêté", s.name, tag: "warning")
             return
         default:
             break
@@ -758,6 +813,52 @@ final class Store: ObservableObject {
         store(s)
         refreshMochi()
         if mode == .hidden && !sessions.isEmpty { withAnimation(Self.openAnimation) { mode = .compact } }
+    }
+
+    /// Tokens de la demande, lus dans l'historique de la session (une ligne JSON par message). Un même
+    /// message de Claude peut tenir sur plusieurs lignes avec le même usage : on le compte une fois.
+    private func countTokens(_ sid: String, path: String, from offset: UInt64) {
+        DispatchQueue.global().async {
+            // L'historique est écrit un peu après l'événement : on laisse le temps à la dernière réponse d'arriver.
+            Thread.sleep(forTimeInterval: 0.8)
+            guard let h = FileHandle(forReadingAtPath: path) else { return }
+            defer { try? h.close() }
+            try? h.seek(toOffset: offset)
+            guard let data = try? h.readToEnd() else { return }
+            var usage: [String: [String: Any]] = [:], last: [String: Any]?
+            for line in data.split(separator: 0x0A) {
+                guard let o = try? JSONSerialization.jsonObject(with: line) as? [String: Any], o["type"] as? String == "assistant",
+                      let m = o["message"] as? [String: Any], let u = m["usage"] as? [String: Any] else { continue }
+                usage[m["id"] as? String ?? UUID().uuidString] = u
+                last = u
+            }
+            guard !usage.isEmpty else { return }
+            func n(_ u: [String: Any]?, _ k: String) -> Int { (u?[k] as? Int) ?? 0 }
+            let output = usage.values.reduce(0) { $0 + n($1, "output_tokens") }
+            let context = n(last, "input_tokens") + n(last, "cache_read_input_tokens") + n(last, "cache_creation_input_tokens")
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let store = Store.shared
+                    guard var s = store.session(sid), s.turn != nil else { return }
+                    s.turn?.output = output
+                    s.turn?.context = context
+                    store.store(s)
+                }
+            }
+        }
+    }
+
+    /// Captures de plus de 7 jours qui ne sont plus dans l'étagère : supprimées (au lancement).
+    func cleanCaptures() {
+        let dir = Bridge.folder.appendingPathComponent("Captures"), kept = Set(shelf.map(\.path))
+        let week = Date().addingTimeInterval(-7 * 24 * 3600)
+        DispatchQueue.global(qos: .utility).async {
+            let fm = FileManager.default
+            for url in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] {
+                let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date()
+                if date < week && !kept.contains(url.path) { try? fm.removeItem(at: url) }
+            }
+        }
     }
 
     /// Lignes ajoutées / retirées (git, depuis le dernier commit) dans les fichiers de la demande.
@@ -845,6 +946,13 @@ final class Store: ObservableObject {
     }
 
     /// Réponse depuis l'encoche : "allow", "always" ou "deny".
+    /// ⌥⇧Y / ⌥⇧N : on ne répond qu'à une demande affichée ; sinon le premier appui la montre.
+    func answerFromKeyboard(_ decision: String) {
+        guard !permissions.isEmpty else { return }
+        guard mode == .expanded && view == .approval else { return show(.approval) }
+        answer(decision)
+    }
+
     func answer(_ decision: String) {
         guard let p = permissions.first else { return }
         p.responder.reply(["permissionDecision": decision])
@@ -1029,6 +1137,7 @@ final class Store: ObservableObject {
     @Published var openAtLogin = SMAppService.mainApp.status == .enabled
 
     func refreshHooked() {
+        loadDefaultModel()
         DispatchQueue.global().async {
             let on = Bridge.runHookTool("--status").output == "branché"
             DispatchQueue.main.async { self.hooked = on }
