@@ -190,7 +190,7 @@ final class Store: ObservableObject {
         case .dev: devShowsServers ? 206 : 246
         case .care: 164
         case .todos: 216
-        case .friends: 184
+        case .friends: friendsShowsChat ? 240 : 190
         case .upload, .shelf, .music: 176
         case .converting, .result: 150
         }
@@ -1064,6 +1064,35 @@ final class Store: ObservableObject {
         sessions.filter { $0.state == .working || $0.state == .approval || $0.state == .waiting }
             .sorted { $0.updated > $1.updated }
             .compactMap(\.plan).first { $0.done < $0.total }
+    }
+
+    /// Couleur du bonhomme (nil : celle du skin). Les potes la voient.
+    func setColor(_ hex: String?) {
+        UserDefaults.standard.set(hex ?? "", forKey: "skin.color")
+        mochi.tint = hex
+        mochi.emote(.happy, 1)
+        Sound.shared.play("pop")
+        Friends.shared.skinChanged()
+        objectWillChange.send()
+    }
+
+    /// Onglet Potes : les bonshommes, ou le chat.
+    @Published var friendsShowsChat = false
+
+    var chatVisible: Bool { mode == .expanded && view == .friends && friendsShowsChat }
+
+    /// Un message d'un pote : le bonhomme réagit, et le chat s'ouvre si on n'est pas occupé.
+    func chatReceived(from name: String, text: String) {
+        Sound.shared.play("question")
+        mochi.emote(.happy, 1.5)
+        Phone.notify("Message de \(name)", text, tag: "speech_balloon")
+        guard !busy else { return }
+        friendsShowsChat = true
+        show(.friends, sound: nil)
+        pinUntil = Date().addingTimeInterval(5)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.2) {
+            if self.view == .friends && !self.hovering && !self.composing { self.collapse() }
+        }
     }
 
     /// Change le skin du bonhomme (et des mini-bonshommes des sessions).

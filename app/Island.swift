@@ -233,6 +233,17 @@ struct SettingsMenu: View {
                 }
             }
         }
+        Menu("Couleur") {
+            Button { store.setColor(nil) } label: {
+                if store.mochi.tint == nil { Label("Celle du skin", systemImage: "checkmark") } else { Text("Celle du skin") }
+            }
+            Divider()
+            ForEach(Skin.colors, id: \.hex) { c in
+                Button { store.setColor(c.hex) } label: {
+                    if store.mochi.tint == c.hex { Label(c.name, systemImage: "checkmark") } else { Text(c.name) }
+                }
+            }
+        }
         Button("Réglages…") { SettingsWindow.show() }
         Button("Quitter Encoche") { NSApp.terminate(nil) }
     }
@@ -347,8 +358,13 @@ private struct Tabs: View {
             item(.shelf, icon: store.shelf.isEmpty ? "tray" : "tray.full.fill", title: "Étagère",
                  badge: store.shelf.isEmpty ? nil : "\(store.shelf.count)", live: false) { store.goTo(.shelf) }
             item(.dev, icon: "terminal", title: "Dev", badge: nil, live: false) { store.goTo(.dev) }
-            let online = friends.list.filter(\.online).count
-            item(.friends, icon: "person.2.fill", title: "Potes", badge: online > 0 ? "\(online)" : nil, live: false) { store.goTo(.friends) }
+            // Messages non lus d'abord (bulle), sinon le nombre de potes sur leur Mac.
+            let online = friends.list.filter { $0.online && $0.presence == .active }.count
+            item(.friends, icon: friends.unread > 0 ? "bubble.left.and.bubble.right.fill" : "person.2.fill", title: "Potes",
+                 badge: friends.unread > 0 ? "\(friends.unread)" : online > 0 ? "\(online)" : nil, live: false) {
+                if friends.unread > 0 { store.friendsShowsChat = true }
+                store.goTo(.friends)
+            }
         }
         .animation(.spring(response: 0.34, dampingFraction: 0.8), value: current)
     }
@@ -1555,7 +1571,7 @@ private struct TodoRow: View {
     }
 }
 
-/// Entre potes : les bonshommes du groupe, leur humeur ; un clic envoie un cœur.
+/// Entre potes : les bonshommes du groupe (humeur, présence ; un clic envoie un cœur), ou le chat.
 private struct FriendsPanel: View {
     @ObservedObject var store: Store
     @ObservedObject var friends = Friends.shared
@@ -1567,22 +1583,34 @@ private struct FriendsPanel: View {
                     HStack(spacing: 16) {
                         VStack(alignment: .leading, spacing: 5) {
                             big("Joue avec tes potes.")
-                            sub("Crée un groupe, donne-leur le code : vous verrez vos bonshommes ici.")
+                            sub("Crée un groupe, donne-leur le code : vous verrez vos bonshommes ici, et vous pourrez discuter.")
                         }
                         Spacer()
                         Button("Configurer") { SettingsWindow.show() }.buttonStyle(Pill(primary: true))
                     }
                 } else {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(friends.notice ?? (friends.list.isEmpty ? "Personne pour l'instant : donne le code du groupe à tes potes."
-                                                                    : "Clique sur un pote pour lui envoyer un cœur."))
-                            .font(Fonts.label.weight(friends.notice == nil ? .regular : .medium))
-                            .foregroundStyle(friends.notice == nil ? Color.muted : Color(hex: "#FF9ECF"))
-                            .lineLimit(1)
-                            .animation(.easeOut(duration: 0.2), value: friends.notice)
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 6) {
-                                ForEach(friends.list) { f in FriendTile(friend: f) }
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack(spacing: 8) {
+                            Segments(left: "Potes", right: friends.unread > 0 ? "Chat \(friends.unread)" : "Chat", rightOn: store.friendsShowsChat) { on in
+                                Sound.shared.play("tick")
+                                withAnimation(Store.openAnimation) { store.friendsShowsChat = on }
+                            }
+                            if let n = friends.notice {
+                                Text(n).font(Fonts.label.weight(.medium)).foregroundStyle(Color(hex: "#FF9ECF")).lineLimit(1)
+                            } else if !store.friendsShowsChat {
+                                Text(friends.list.isEmpty ? "Donne le code du groupe à tes potes." : "Clic : un cœur · survol : coucou")
+                                    .font(Fonts.label).foregroundStyle(Color.muted).lineLimit(1)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .animation(.easeOut(duration: 0.2), value: friends.notice)
+                        if store.friendsShowsChat {
+                            ChatView(store: store)
+                        } else {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 6) {
+                                    ForEach(friends.list) { f in FriendTile(friend: f) }
+                                }
                             }
                         }
                     }
@@ -1590,7 +1618,85 @@ private struct FriendsPanel: View {
             }
             .padding(.leading, 100)
             .padding(.trailing, 14)
-            .padding(.vertical, 12)
+            .padding(.vertical, 11)
+        }
+    }
+}
+
+/// Chat du groupe : les derniers messages, et le champ pour écrire (Entrée envoie).
+private struct ChatView: View {
+    @ObservedObject var store: Store
+    @ObservedObject var friends = Friends.shared
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ScrollViewReader { reader in
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        if friends.chat.isEmpty {
+                            Text("Pas encore de message. Dis bonjour !").font(Fonts.label).foregroundStyle(Color.faint)
+                                .frame(maxWidth: .infinity).padding(.top, 20)
+                        }
+                        ForEach(friends.chat) { m in Bubble(message: m, color: color(m)) }
+                        Color.clear.frame(height: 1).id("fin")
+                    }
+                    .padding(.horizontal, 2)
+                }
+                .onAppear { reader.scrollTo("fin", anchor: .bottom); friends.markRead() }
+                .onChange(of: friends.chat.count) { _, _ in
+                    withAnimation(.easeOut(duration: 0.2)) { reader.scrollTo("fin", anchor: .bottom) }
+                    friends.markRead()
+                }
+            }
+            HStack(spacing: 6) {
+                ComposeField(text: $friends.draft, placeholder: "Écris à tes potes… (Entrée)",
+                             onSubmit: { friends.sendChat() }, onEditing: { store.setComposing($0) })
+                    .frame(height: 18)
+                Button { friends.sendChat() } label: {
+                    Image(systemName: "arrow.up").font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Color.onLight)
+                        .frame(width: 22, height: 22)
+                        .background(Circle().fill(Color(hex: "#FF8BC4")))
+                }
+                .buttonStyle(.plain)
+                .opacity(friends.draft.trimmingCharacters(in: .whitespaces).isEmpty ? 0.35 : 1)
+                .help("Envoyer (Entrée)")
+                .accessibilityLabel("Envoyer le message")
+            }
+            .padding(.leading, 11)
+            .padding(.trailing, 5)
+            .padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(.white.opacity(store.composing ? 0.11 : 0.07)))
+        }
+    }
+
+    private func color(_ m: Friends.Message) -> Color {
+        friends.list.first { $0.id == m.from }?.color ?? Color(hex: "#FF9ECF")
+    }
+}
+
+private struct Bubble: View {
+    let message: Friends.Message
+    let color: Color
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 6) {
+            if message.mine { Spacer(minLength: 60) }
+            VStack(alignment: message.mine ? .trailing : .leading, spacing: 2) {
+                if !message.mine {
+                    Text(message.name).font(Fonts.caption.weight(.semibold)).foregroundStyle(color)
+                }
+                Text(message.text)
+                    .font(Fonts.label)
+                    .foregroundStyle(message.mine ? Color.onLight : Color.ink)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(message.mine ? Color(hex: "#FF8BC4") : .white.opacity(0.09)))
+            }
+            .help(message.at.formatted(date: .omitted, time: .shortened))
+            if !message.mine { Spacer(minLength: 60) }
         }
     }
 }
@@ -1608,15 +1714,18 @@ private struct FriendTile: View {
                     friend.mochi.draw(ctx, cx: size.width / 2, cy: size.height / 2 + 4, hb: 28)
                 }
             }
-            .frame(width: 84, height: 58)
-            .opacity(friend.online ? 1 : 0.45)
-            Text(friend.name).font(Fonts.labelBold).lineLimit(1)
-            Text(friend.online ? label(friend.state) : "hors ligne")
+            .frame(width: 84, height: 56)
+            .opacity(friend.online ? (friend.presence == .away ? 0.7 : 1) : 0.4)
+            HStack(spacing: 4) {
+                Circle().fill(dot).frame(width: 6, height: 6)
+                Text(friend.name).font(Fonts.labelBold).lineLimit(1)
+            }
+            Text(status)
                 .font(Fonts.caption)
-                .foregroundStyle(friend.online ? Color(hex: STYLES[friend.state]?.col ?? "#9A9FA8") : Color.faint)
+                .foregroundStyle(friend.online && friend.presence == .active ? Color(hex: STYLES[friend.state]?.col ?? "#9A9FA8") : Color.faint)
                 .lineLimit(1)
         }
-        .frame(width: 92)
+        .frame(width: 96)
         .padding(.vertical, 4)
         .background(RoundedRectangle(cornerRadius: Radius.item, style: .continuous).fill(.white.opacity(hover ? 0.09 : 0.03)))
         .overlay(alignment: .topTrailing) {
@@ -1635,17 +1744,27 @@ private struct FriendTile: View {
             Button("Faire coucou") { Friends.shared.poke(friend, "wave") }
         }
         .help("Envoyer un cœur à \(friend.name)")
-        .accessibilityLabel("\(friend.name), \(friend.online ? label(friend.state) : "hors ligne")")
+        .accessibilityLabel("\(friend.name), \(status)")
     }
 
-    private func label(_ s: BotState) -> String {
-        switch s {
-        case .working: "Claude travaille"
-        case .approval: "attend une autorisation"
-        case .waiting: "attend sa réponse"
-        case .error: "a un souci"
-        case .sleeping: "dort"
-        case .finished, .idle, .dizzy: friend.sessions > 0 ? "au repos" : "tranquille"
+    /// Vert : sur son Mac. Orange : absent. Gris : hors ligne.
+    private var dot: Color {
+        !friend.online ? Color.faint : friend.presence == .active ? Color.success : Color.warning
+    }
+
+    private var status: String {
+        guard friend.online else { return "hors ligne" }
+        if friend.presence == .away {
+            let m = Int(Date().timeIntervalSince(friend.since) / 60)
+            return m < 1 ? "absent" : m < 60 ? "absent · \(m) min" : "absent · \(m / 60) h"
+        }
+        switch friend.state {
+        case .working: return "Claude travaille"
+        case .approval: return "attend une autorisation"
+        case .waiting: return "attend sa réponse"
+        case .error: return "a un souci"
+        case .sleeping: return "sur son Mac"
+        case .finished, .idle, .dizzy: return "sur son Mac"
         }
     }
 }

@@ -14,13 +14,13 @@ Un petit bonhomme qui vit dans l'encoche de ton Mac et garde un œil sur Claude 
 - **Onglet Dev** : tes serveurs locaux (ouvrir, arrêter), CPU, mémoire, batterie.
 - **Spotify** : le morceau en cours, lecture/pause, précédent/suivant.
 - **Rappels** : pause, verre d'eau, « va dormir »… Tout se coupe dans les Réglages.
-- **Entre potes** : partagez un groupe, voyez les bonshommes des autres et envoyez-vous des cœurs.
+- **Entre potes** : partagez un groupe, voyez les bonshommes des autres (et s'ils sont sur leur Mac), discutez dans le chat, envoyez-vous des cœurs.
 - **Le plan de Claude** : sa liste de tâches, cochée au fur et à mesure.
 - **Notifications sur ton téléphone** avec [ntfy](https://ntfy.sh), si tu veux (désactivé par défaut).
 
 ## Skins
 
-Choisis le look de ton bonhomme dans les Réglages (ou clic droit sur lui). Tes potes voient le tien.
+Choisis le look de ton bonhomme et sa couleur dans les Réglages (ou clic droit sur lui). Tes potes voient le tien.
 
 ![Les skins du bonhomme](docs/skins.png)
 

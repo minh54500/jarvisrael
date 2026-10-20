@@ -26,4 +26,16 @@ struct Skin: Identifiable, Equatable {
 
     /// Le skin choisi (la kippa par défaut).
     static var current: Skin { named(UserDefaults.standard.string(forKey: "skin")) }
+
+    /// Couleur choisie pour le bonhomme (nil : celle du skin).
+    static var tint: String? {
+        let c = UserDefaults.standard.string(forKey: "skin.color") ?? ""
+        return c.isEmpty ? nil : c
+    }
+
+    /// Couleurs proposées (en plus du nuancier).
+    static let colors: [(name: String, hex: String)] = [
+        ("Rose", "#F25FB0"), ("Violet", "#8B5CF6"), ("Bleu", "#3B82F6"), ("Cyan", "#22C3E6"), ("Vert", "#22C55E"),
+        ("Jaune", "#F5C518"), ("Orange", "#F97316"), ("Rouge", "#EF4444"), ("Nuit", "#334155"),
+    ]
 }

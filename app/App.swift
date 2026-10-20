@@ -46,6 +46,11 @@ final class NotchPanel: NSPanel {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// App quittée : les potes nous voient hors ligne tout de suite.
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated { Friends.shared.goOffline() }
+    }
+
     private var panel: NotchPanel!
     private var bridge: Bridge!
     private var timer: Timer?

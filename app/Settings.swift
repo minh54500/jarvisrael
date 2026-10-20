@@ -22,9 +22,16 @@ enum SettingsWindow {
     }
 }
 
+/// Couleur du nuancier → « #RRGGBB ».
+private func hexString(_ c: Color) -> String {
+    let n = NSColor(c).usingColorSpace(.sRGB) ?? .systemPink
+    return String(format: "#%02X%02X%02X", Int(n.redComponent * 255), Int(n.greenComponent * 255), Int(n.blueComponent * 255))
+}
+
 /// Le bonhomme dans un skin donné, immobile (aperçu des Réglages).
 private struct SkinPreview: View {
     let skin: Skin
+    let tint: String?
     @State private var mochi: Mochi?
 
     var body: some View {
@@ -32,7 +39,7 @@ private struct SkinPreview: View {
             mochi?.draw(ctx, cx: size.width / 2, cy: size.height / 2 + 5, hb: 40)
         }
         .onAppear {
-            let m = Mochi(skin: skin, now: CACurrentMediaTime())
+            let m = Mochi(skin: skin, tint: tint, now: CACurrentMediaTime())
             m.update(CACurrentMediaTime() + 0.016)
             mochi = m
         }
@@ -65,7 +72,7 @@ private struct SettingsView: View {
                         let on = s.id == store.mochi.skin.id
                         Button { store.setSkin(s) } label: {
                             VStack(spacing: 4) {
-                                SkinPreview(skin: s).frame(width: 96, height: 70)
+                                SkinPreview(skin: s, tint: store.mochi.tint).frame(width: 96, height: 70).id((store.mochi.tint ?? "") + s.id)
                                 Text(s.name).font(.callout.weight(on ? .semibold : .regular))
                             }
                             .padding(.vertical, 6)
@@ -79,7 +86,31 @@ private struct SettingsView: View {
                         .accessibilityAddTraits(on ? .isSelected : [])
                     }
                 }
-                Text("Tes potes voient ton skin dans leur onglet Potes.").font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 7) {
+                    Text("Couleur")
+                    Spacer()
+                    Button { store.setColor(nil) } label: {
+                        Text("Skin").font(.caption).padding(.horizontal, 6).frame(height: 20)
+                            .background(Capsule().strokeBorder(store.mochi.tint == nil ? Color.accentColor : .secondary.opacity(0.4), lineWidth: 1.5))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Les couleurs du skin")
+                    ForEach(Skin.colors, id: \.hex) { c in
+                        Button { store.setColor(c.hex) } label: {
+                            Circle().fill(Color(hex: c.hex)).frame(width: 18, height: 18)
+                                .overlay(Circle().strokeBorder(store.mochi.tint == c.hex ? Color.primary : .clear, lineWidth: 2).padding(-3))
+                        }
+                        .buttonStyle(.plain)
+                        .help(c.name)
+                        .accessibilityLabel("Couleur \(c.name)")
+                    }
+                    ColorPicker("", selection: Binding(
+                        get: { Color(hex: store.mochi.tint ?? Skin.current.aura) },
+                        set: { store.setColor(hexString($0)) }), supportsOpacity: false)
+                        .labelsHidden()
+                        .help("N'importe quelle couleur")
+                }
+                Text("Tes potes voient ton skin et ta couleur dans leur onglet Potes.").font(.caption).foregroundStyle(.secondary)
             }
 
             Section("Raccourcis") {

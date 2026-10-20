@@ -83,14 +83,17 @@ final class Mochi {
     let mini: Bool
     let bodyColor: RGB?
     /// Couleurs et accessoire (voir Skins.swift).
-    var skin: Skin    /// Regard demandé de l'extérieur (souris), -1…1, y positif = vers le bas.
+    var skin: Skin
+    /// Couleur choisie par l'utilisateur, à la place de celles du skin.
+    var tint: String?    /// Regard demandé de l'extérieur (souris), -1…1, y positif = vers le bas.
     var lookTarget = (x: 0.0, y: 0.0)
     /// Coucou d'entrée en cours (instant de départ).
     private(set) var greetStart: Double?
     private var greet = (scale: 1.0, dx: 0.0, dy: 0.0, eyeDrop: 0.0, halo: 1.0)
 
-    init(mini: Bool = false, bodyColor: String? = nil, skin: Skin = .current, now: Double) {
+    init(mini: Bool = false, bodyColor: String? = nil, skin: Skin = .current, tint: String? = Skin.tint, now: Double) {
         self.skin = skin
+        self.tint = tint
         self.mini = mini
         self.bodyColor = bodyColor.map { RGB(hex: $0) }
         born = now - Double.random(in: 0...5)
@@ -344,7 +347,7 @@ final class Mochi {
 
         // halo
         if !mini {
-            let glow = RGB(hex: state == .idle ? skin.aura : style.glow), a = style.glowAlpha * 0.6 * greet.halo
+            let glow = RGB(hex: state == .idle ? aura : style.glow), a = style.glowAlpha * 0.6 * greet.halo
             let R = hw * 2.2
             c.fill(Path(ellipseIn: CGRect(cx: px, cy: py, w: 2 * R, h: 2 * R)),
                    with: .radialGradient(Gradient(colors: [glow.color(a), glow.color(0)]),
@@ -362,7 +365,7 @@ final class Mochi {
             // Traits de plus en plus fins et opaques autour du contour : une lueur sans flou
             // (un flou recalculé 30 fois par seconde coûtait plus que tout le reste du dessin).
             for (w, a) in [(0.62, 0.07), (0.44, 0.1), (0.28, 0.14), (0.14, 0.2)] {
-                b.stroke(body, with: .color(RGB(hex: skin.aura).color(a * greet.halo)), style: StrokeStyle(lineWidth: hh * w, lineJoin: .round))
+                b.stroke(body, with: .color(RGB(hex: aura).color(a * greet.halo)), style: StrokeStyle(lineWidth: hh * w, lineJoin: .round))
             }
         }
         b.fill(body, with: .linearGradient(Gradient(colors: [c0.color(), c1.color()]),
@@ -544,7 +547,7 @@ final class Mochi {
             ctx.fill(cup, with: .linearGradient(Gradient(colors: [lit, dark]), startPoint: CGPoint(x: 0, y: -hh * 0.25), endPoint: CGPoint(x: 0, y: hh * 0.4)))
             if !mini {
                 ctx.fill(Path(roundedRect: CGRect(cx: side * hw * 1.04, cy: hh * 0.08, w: hw * 0.08, h: hh * 0.3), cornerRadius: hw * 0.04),
-                         with: .color(RGB(hex: skin.aura).color(0.9)))
+                         with: .color(RGB(hex: aura).color(0.9)))
             }
         }
     }
@@ -641,8 +644,15 @@ final class Mochi {
         ctx.stroke(star, with: .color(Color(hex: "#2F5BD3")), style: StrokeStyle(lineWidth: max(0.6, r * 0.22), lineJoin: .round))
     }
 
+    /// Couleur de la lueur : celle choisie, sinon celle du skin.
+    private var aura: String { bodyColor == nil ? (tint ?? skin.aura) : skin.aura }
+
     /// Haut et bas du corps : le galet néon, ou la couleur de la session pour les mini.
     private var palette: (RGB, RGB) {
+        if bodyColor == nil, let tint {  // une couleur choisie : plus claire en haut, plus profonde en bas
+            let c = RGB(hex: tint)
+            return (c.mix(RGB(255, 255, 255), 0.38), c.mix(RGB(0, 0, 0), 0.22))
+        }
         guard let c = bodyColor else { return (RGB(hex: skin.top), RGB(hex: skin.bottom)) }
         return (c.mix(RGB(255, 255, 255), 0.3), c.mix(RGB(0, 0, 0), 0.12))
     }
