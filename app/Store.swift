@@ -140,7 +140,7 @@ struct Toast: Equatable {
     var opensChat = false
     var opensUpdate = false  // nouvelle version d'Encoche : un clic ouvre la mise à jour
 }
-enum Panel: Equatable { case greeting, overview, empty, approval, finished, error, upload, choose, converting, result, shelf, music, dev, care, todos, friends }
+enum Panel: Equatable { case greeting, overview, empty, approval, finished, error, upload, choose, converting, result, shelf, music, dev, care, todos, friends, projects, recap, welcome }
 
 private let PALETTE = ["#FF6B5B", "#2DD4A7", "#F7B32B", "#A78BFA", "#38BDF8", "#F472B6"]
 
@@ -223,6 +223,8 @@ final class Store: ObservableObject {
         case .care: 164
         case .todos: 216
         case .friends: friendsShowsChat ? 240 : 190
+        case .projects, .recap: 262
+        case .welcome: 214
         case .upload, .shelf: 176
         case .music: 196
         case .converting, .result: 150
@@ -297,6 +299,7 @@ final class Store: ObservableObject {
         let menu = menuOpen && Date().timeIntervalSince(menuOpenedAt ?? .distantPast) < 120
         if composing || sending || menu || Voice.shared.listening { return true }
         if view == .dev && (Prompter.shared.showing || TextAI.shared.busy != nil) { return true }  // lecture, Claude qui réfléchit
+        if view == .welcome || (view == .recap && Recap.shared.busy) { return true }
         if !permissions.isEmpty && mode == .expanded && view == .approval { return true }
         if view == .choose || view == .converting || fileDragging { return true }
         if let pinUntil, Date() < pinUntil { return true }
@@ -703,11 +706,20 @@ final class Store: ObservableObject {
 
     private func captured(_ url: URL) {
         guard FileManager.default.fileExists(atPath: url.path) else { return }  // Échap : annulée
+        // Annoter d'abord (flèche, cadre, stylo), sauf si c'est coupé dans les Réglages.
+        guard UserDefaults.standard.object(forKey: "annotate") as? Bool ?? true else { return keepCapture(url, send: true) }
+        Annotator.open(url) { result, send in
+            MainActor.assumeIsolated { if let result { Store.shared.keepCapture(result, send: send) } }
+        }
+    }
+
+    /// La capture (annotée ou non) : dans l'étagère, et dans le message à Claude si on l'envoie.
+    private func keepCapture(_ url: URL, send: Bool) {
         if !shelf.contains(url) { shelf.append(url) }
         saveShelf()
         Sound.shared.play("pop")
         mochi.emote(.happy, 0.8)
-        guard focused != nil else {
+        guard send, focused != nil else {
             show(.shelf, sound: nil)
             return say("Capture gardée dans l'étagère ✓", ok: true)
         }
@@ -1312,8 +1324,32 @@ final class Store: ObservableObject {
     func openToast() {
         guard let t = toast else { return }
         toast = nil
+        if t.opensUpdate { collapse(); return SettingsWindow.show(.update) }
         if t.opensChat { friendsShowsChat = true; Friends.shared.markRead() }
         show(t.opensChat ? .friends : defaultView)
+    }
+
+    // MARK: Visite guidée
+
+    @Published var welcomeStep = 0
+    static let welcomeSteps = 5
+
+    /// Au premier lancement (ou depuis les Réglages) : cinq petites étapes dans l'encoche.
+    func startWelcome() {
+        welcomeStep = 0
+        show(.welcome)
+    }
+
+    func nextWelcome() {
+        Sound.shared.play("tick")
+        if welcomeStep + 1 < Self.welcomeSteps { withAnimation(Self.openAnimation) { welcomeStep += 1 } } else { finishWelcome() }
+    }
+
+    func finishWelcome() {
+        UserDefaults.standard.set(true, forKey: "welcomed")
+        mochi.emote(.proud, 1.6)
+        Sound.shared.play("approve")
+        collapse()
     }
 
     /// Onglet Potes : les bonshommes, ou le chat.

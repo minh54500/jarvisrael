@@ -2,14 +2,22 @@ import AppKit
 import ServiceManagement
 import SwiftUI
 
-/// Fenêtre de réglages (clic droit sur le bonhomme, ou la roue dentée de l'encoche).
+/// Fenêtre de réglages (clic droit sur le bonhomme, ou la roue dentée de l'encoche), en onglets.
 @MainActor
 enum SettingsWindow {
     private static var window: NSWindow?
 
-    static func show() {
+    enum Tab: String, CaseIterable { case general = "Général", mochi = "Bonhomme", keys = "Raccourcis", care = "Rappels", friends = "Potes", update = "Mise à jour" }
+
+    final class Selection: ObservableObject {
+        static let shared = Selection()
+        @Published var tab = Tab.general
+    }
+
+    static func show(_ tab: Tab? = nil) {
+        if let tab { Selection.shared.tab = tab }
         if window == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 700),
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 540, height: 600),
                              styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
             w.title = "Réglages d'Encoche"
             w.isReleasedWhenClosed = false
@@ -63,9 +71,33 @@ private struct SettingsView: View {
     @AppStorage("friends.on") private var friendsOn = false
     @AppStorage("friends.name") private var friendsName = ""
     @AppStorage("friends.group") private var friendsGroup = ""
+    @AppStorage("annotate") private var annotate = true
+    @ObservedObject private var updater = Updater.shared
+    @ObservedObject private var selection = SettingsWindow.Selection.shared
 
     var body: some View {
-        Form {
+        TabView(selection: $selection.tab) {
+            Form {
+            Section("Général") {
+                Toggle("Sons", isOn: Binding(get: { Sound.shared.on }, set: { Sound.shared.on = $0; store.objectWillChange.send() }))
+                Toggle("Ouvrir au démarrage du Mac", isOn: Binding(get: { store.openAtLogin }, set: { store.setLoginItem($0) }))
+                Toggle("Cacher l'encoche dans les partages d'écran et les captures", isOn: Binding(
+                    get: { store.hiddenInShares },
+                    set: { UserDefaults.standard.set($0, forKey: "privacy.hide"); store.applyPrivacy($0); store.objectWillChange.send() }))
+                Toggle("Annoter mes captures avant de les envoyer", isOn: $annotate)
+                HStack {
+                    Text(store.hooked ? "Branchée à Claude Code" : "Pas branchée à Claude Code")
+                    Spacer()
+                    Button(store.hooked ? "Débrancher" : "Brancher…") { store.setHooked(!store.hooked) }
+                }
+                Button("Revoir la visite guidée") { store.startWelcome() }
+            }
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("Général", systemImage: "gearshape") }
+            .tag(SettingsWindow.Tab.general)
+
+            Form {
             Section("Skin du bonhomme") {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
                     ForEach(Skin.all) { s in
@@ -113,6 +145,12 @@ private struct SettingsView: View {
                 Text("Tes potes voient ton skin et ta couleur dans leur onglet Potes.").font(.caption).foregroundStyle(.secondary)
             }
 
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("Bonhomme", systemImage: "face.smiling") }
+            .tag(SettingsWindow.Tab.mochi)
+
+            Form {
             Section("Raccourcis") {
                 Picker("Écrire à Claude", selection: $summon) {
                     ForEach(HotKey.Summon.allCases) { Text($0.label).tag($0) }
@@ -139,6 +177,12 @@ private struct SettingsView: View {
                 Button("Ajouter un favori") { store.favorites.append("Nouveau message") }
             }
 
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("Raccourcis", systemImage: "keyboard") }
+            .tag(SettingsWindow.Tab.keys)
+
+            Form {
             Section("Rappels du bonhomme") {
                 Toggle("Rappels activés", isOn: $care)
                 Group {
@@ -152,6 +196,12 @@ private struct SettingsView: View {
                 .disabled(!care)
             }
 
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("Rappels", systemImage: "heart") }
+            .tag(SettingsWindow.Tab.care)
+
+            Form {
             Section("Notifications sur le téléphone (ntfy)") {
                 Toggle("Prévenir quand Claude a fini ou attend", isOn: $phone)
                 HStack {
@@ -192,21 +242,44 @@ private struct SettingsView: View {
             .onChange(of: friendsGroup) { _, _ in Friends.shared.restartSoon() }
             .onChange(of: friendsName) { _, _ in Friends.shared.restartSoon() }
 
-            Section("Général") {
-                Toggle("Sons", isOn: Binding(get: { Sound.shared.on }, set: { Sound.shared.on = $0; store.objectWillChange.send() }))
-                Toggle("Ouvrir au démarrage du Mac", isOn: Binding(get: { store.openAtLogin }, set: { store.setLoginItem($0) }))
-                Toggle("Cacher l'encoche dans les partages d'écran et les captures", isOn: Binding(
-                    get: { store.hiddenInShares },
-                    set: { UserDefaults.standard.set($0, forKey: "privacy.hide"); store.applyPrivacy($0); store.objectWillChange.send() }))
-                HStack {
-                    Text(store.hooked ? "Branchée à Claude Code" : "Pas branchée à Claude Code")
-                    Spacer()
-                    Button(store.hooked ? "Débrancher" : "Brancher…") { store.setHooked(!store.hooked) }
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("Potes", systemImage: "person.2") }
+            .tag(SettingsWindow.Tab.friends)
+
+            Form {
+            Section("Mise à jour") {
+                LabeledContent("Version installée", value: updater.version)
+                if updater.source == nil {
+                    Text("Cette copie d'Encoche n'a pas été installée avec la commande d'installation : mets-la à jour à la main.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    HStack {
+                        Button(updater.checking ? "Je regarde…" : "Rechercher une mise à jour") { updater.check() }.disabled(updater.checking)
+                        Spacer()
+                        if let d = updater.lastCheck {
+                            Text("Vérifié à \(d.formatted(date: .omitted, time: .shortened))").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    if updater.news.isEmpty {
+                        Text(updater.lastCheck == nil ? "Encoche regarde toute seule toutes les 6 heures." : "Tu as la dernière version ✓")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Nouveautés :").font(.headline)
+                        ForEach(updater.news.prefix(8), id: \.self) { Text("• " + $0).font(.callout) }
+                        Button(updater.updating ? "Mise à jour en cours…" : "Mettre à jour et relancer") { updater.update() }
+                            .buttonStyle(.borderedProminent).disabled(updater.updating)
+                        Text("Encoche se ferme, se recompile (1 à 2 minutes) et se rouvre toute seule.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let p = updater.problem { Text(p).font(.caption).foregroundStyle(.red) }
                 }
             }
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("Mise à jour", systemImage: "arrow.down.circle") }
+            .tag(SettingsWindow.Tab.update)
         }
-        .formStyle(.grouped)
-        .frame(width: 500, height: 700)
+        .frame(width: 540, height: 600)
         .onChange(of: store.favorites) { _, v in UserDefaults.standard.set(v, forKey: "favorites") }
     }
 }

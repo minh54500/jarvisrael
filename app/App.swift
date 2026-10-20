@@ -128,6 +128,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Friends.shared.restart()
         Usage.shared.start()
         Devices.shared.start()
+        Updater.shared.start()
+        if !UserDefaults.standard.bool(forKey: "welcomed") {  // premier lancement : la visite guidée
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { Store.shared.startWelcome() }
+        }
         HotKey.installTextAI()
 
         // Menu ouvert (modèle, réglages) : l'encoche ne se referme pas sous lui.

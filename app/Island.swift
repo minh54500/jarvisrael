@@ -249,6 +249,9 @@ struct SettingsMenu: View {
                 }
             }
         }
+        Button("Projets récents") { store.show(.projects) }
+        Button("Résumé de ma journée") { store.show(.recap); Recap.shared.make() }
+        if !Updater.shared.news.isEmpty { Button("Mettre à jour Encoche…") { SettingsWindow.show(.update) } }
         Button("Réglages…") { SettingsWindow.show() }
         Button("Quitter Encoche") { NSApp.terminate(nil) }
     }
@@ -361,6 +364,9 @@ struct IslandContent: View {
                 case .care: CarePanel(store: store)
                 case .todos: TodosPanel(store: store)
                 case .friends: FriendsPanel(store: store)
+                case .projects: ProjectsPanel(store: store)
+                case .recap: RecapPanel(store: store)
+                case .welcome: WelcomePanel(store: store)
                 }
             }
             .id(store.view)
@@ -634,6 +640,8 @@ private struct EmptyPanel: View {
                 Spacer()
                 if !store.hooked {
                     Button("Brancher à Claude Code") { store.setHooked(true) }.buttonStyle(Pill(primary: true))
+                } else {
+                    Button("Projets récents") { store.goTo(.projects) }.buttonStyle(Pill(primary: true))
                 }
             }
             .padding(.leading, 110)
@@ -666,6 +674,12 @@ private struct OverviewPanel: View {
                             .help("Ouvrir dans \(s.place)")
                             .accessibilityLabel("Ouvrir \(s.name) dans \(s.place)")
                         }
+                        Button { store.goTo(.projects) } label: {
+                            Image(systemName: "folder").font(.system(size: 10.5, weight: .bold))
+                        }
+                        .buttonStyle(IconButton())
+                        .help("Projets récents : reprendre ou lancer une session")
+                        .accessibilityLabel("Projets récents")
                     }
                     if let notice = store.notice {
                         Text(notice.text)
@@ -2371,6 +2385,209 @@ private struct PlanView: View {
         .padding(.leading, 100)
         .padding(.trailing, 16)
         .padding(.vertical, 11)
+    }
+}
+
+/// Projets Claude Code récents : reprendre une session, ou en lancer une nouvelle dans un projet.
+private struct ProjectsPanel: View {
+    @ObservedObject var store: Store
+    @ObservedObject var projects = Projects.shared
+    @State private var open: String?
+
+    var body: some View {
+        Card(wash: Color(hex: "#3B9EFF", 0.14)) {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack {
+                    Text("Projets récents").font(Fonts.labelBold).foregroundStyle(Color.muted)
+                    if projects.loading { ProgressView().controlSize(.mini) }
+                    Spacer()
+                    Button("Résumé du jour") { store.goTo(.recap); Recap.shared.make() }.buttonStyle(Pill())
+                }
+                if projects.list.isEmpty && !projects.loading {
+                    Text("Pas encore de session Claude Code sur ce Mac.").font(Fonts.lead)
+                }
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(spacing: 4) {
+                        ForEach(projects.list) { p in ProjectRow(project: p, open: $open) }
+                    }
+                }
+            }
+            .padding(.leading, 100)
+            .padding(.trailing, 12)
+            .padding(.vertical, 11)
+        }
+        .onAppear { projects.refresh() }
+    }
+}
+
+private struct ProjectRow: View {
+    let project: Projects.Project
+    @Binding var open: String?
+    @State private var hover = false
+
+    var body: some View {
+        let expanded = open == project.id
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                Image(systemName: "folder.fill").font(.system(size: 11)).foregroundStyle(Color(hex: "#7CC7FF"))
+                Text(project.name).font(Fonts.labelBold).lineLimit(1)
+                Text(ago(project.last)).font(Fonts.caption).foregroundStyle(Color.faint)
+                Spacer(minLength: 4)
+                Button { Projects.shared.start(in: project) } label: { Image(systemName: "plus").font(.system(size: 10, weight: .bold)) }
+                    .buttonStyle(MiniIcon()).help("Nouvelle session Claude dans \(project.name)")
+                    .accessibilityLabel("Nouvelle session dans \(project.name)")
+                if let c = project.sessions.first {
+                    Button("Reprendre") { Projects.shared.resume(c, in: project) }.buttonStyle(Chip())
+                        .help("Reprendre : \(c.title)")
+                }
+                Button { withAnimation(.easeOut(duration: 0.2)) { open = expanded ? nil : project.id } } label: {
+                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).rotationEffect(.degrees(expanded ? 180 : 0))
+                }
+                .buttonStyle(MiniIcon()).help("Les sessions de ce projet")
+                .accessibilityLabel(expanded ? "Masquer les sessions" : "Voir les sessions")
+            }
+            if expanded {
+                ForEach(project.sessions) { c in
+                    Button { Projects.shared.resume(c, in: project) } label: {
+                        HStack(spacing: 6) {
+                            Text(c.title).font(Fonts.caption).foregroundStyle(Color.soft).lineLimit(1)
+                            Spacer(minLength: 4)
+                            Text(ago(c.date)).font(Fonts.caption).foregroundStyle(Color.faint)
+                        }
+                        .padding(.leading, 20)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(HoverDim())
+                    .help("Reprendre cette session dans VS Code")
+                    .contextMenu {
+                        Button("Reprendre dans VS Code") { Projects.shared.resume(c, in: project) }
+                        Button("Reprendre dans le Terminal") { Projects.shared.resumeInTerminal(c, in: project) }
+                    }
+                }
+            } else if let c = project.sessions.first {
+                Text(c.title).font(Fonts.caption).foregroundStyle(Color.faint).lineLimit(1).padding(.leading, 19)
+            }
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: Radius.item, style: .continuous).fill(.white.opacity(hover ? 0.08 : 0.04)))
+        .onHover { hover = $0 }
+    }
+
+    private func ago(_ d: Date) -> String {
+        let f = RelativeDateTimeFormatter()
+        f.locale = Locale(identifier: "fr_FR")
+        f.unitsStyle = .short
+        return f.localizedString(for: d, relativeTo: Date())
+    }
+}
+
+/// Le résumé de la journée, écrit par Claude : à copier pour un client ou pour demain.
+private struct RecapPanel: View {
+    @ObservedObject var store: Store
+    @ObservedObject var recap = Recap.shared
+
+    var body: some View {
+        Card(wash: Color(hex: "#A78BFA", 0.18)) {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack {
+                    Text("Ta journée").font(Fonts.labelBold)
+                    Text(recap.day.formatted(.dateTime.weekday(.wide).day().month(.wide))).font(Fonts.caption).foregroundStyle(Color.faint)
+                    Spacer()
+                    if recap.busy { ProgressView().controlSize(.mini) }
+                }
+                ScrollView(.vertical) {
+                    Text(recap.busy ? "Claude relit ta journée…" : recap.text.isEmpty ? "Clique sur Résumer." : markdown(recap.text))
+                        .font(Fonts.label)
+                        .foregroundStyle(recap.text.isEmpty || recap.busy ? Color.faint : Color.ink)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                }
+                .background(RoundedRectangle(cornerRadius: Radius.item, style: .continuous).fill(Color.sunken))
+                HStack(spacing: 8) {
+                    Button("Copier") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(recap.text, forType: .string)
+                        store.say("Résumé copié ✓", ok: true)
+                    }
+                    .buttonStyle(Pill(primary: true)).disabled(recap.text.isEmpty || recap.busy)
+                    Button(recap.text.isEmpty ? "Résumer" : "Refaire") { recap.make() }.buttonStyle(Pill()).disabled(recap.busy)
+                    Spacer()
+                    Text("Tes demandes à Claude et tes commits du jour").font(Fonts.caption).foregroundStyle(Color.faint)
+                }
+            }
+            .padding(.leading, 100)
+            .padding(.trailing, 12)
+            .padding(.vertical, 11)
+        }
+    }
+
+    private func markdown(_ s: String) -> AttributedString {
+        (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
+    }
+}
+
+/// Visite guidée : cinq étapes, au premier lancement (et depuis les Réglages).
+private struct WelcomePanel: View {
+    @ObservedObject var store: Store
+
+    var body: some View {
+        Card(wash: Color(hex: "#FF8BC4", 0.2)) {
+            VStack(alignment: .leading, spacing: 8) {
+                Group {
+                    switch store.welcomeStep {
+                    case 0:
+                        big("Salut ! Moi, c'est le bonhomme d'Encoche.")
+                        sub("Je vis dans ton encoche et je garde un œil sur Claude Code pour toi : ce qu'il fait, quand il a fini, quand il attend.")
+                    case 1:
+                        big(store.hooked ? "Je suis branché à Claude Code ✓" : "Branche-moi à Claude Code.")
+                        sub("Tes sessions (VS Code ou Terminal) apparaissent ici, et tu autorises ou réponds à Claude sans quitter ce que tu fais.")
+                        if !store.hooked { Button("Brancher à Claude Code") { store.setHooked(true) }.buttonStyle(Pill(primary: true)) }
+                    case 2:
+                        big("Tes raccourcis")
+                        VStack(alignment: .leading, spacing: 3) {
+                            key("⌥ Espace", "écrire à Claude"); key("⌥⇧ Espace", "lui dicter")
+                            key("⌥⇧ R", "l'IA sur un texte sélectionné"); key("⌥⇧ Y / N", "autoriser ou refuser")
+                        }
+                    case 3:
+                        big("Les onglets, en haut")
+                        sub("Claude (sessions, plan, usage) · Musique · Étagère (fichiers, copies) · Outils (terminal, texte IA, miroir, prompteur) · Potes.")
+                    default:
+                        big("C'est parti !")
+                        sub("Survole l'encoche quand tu veux. Clic droit sur moi : skins, couleurs, réglages.")
+                    }
+                }
+                Spacer(minLength: 0)
+                HStack(spacing: 8) {
+                    HStack(spacing: 5) {
+                        ForEach(0..<Store.welcomeSteps, id: \.self) { i in
+                            Circle().fill(i == store.welcomeStep ? Color.ink : Color.faint.opacity(0.5)).frame(width: 6, height: 6)
+                        }
+                    }
+                    Spacer()
+                    if store.welcomeStep + 1 < Store.welcomeSteps {
+                        Button("Passer") { store.finishWelcome() }.buttonStyle(.plain).font(Fonts.caption).foregroundStyle(Color.faint)
+                    }
+                    Button(store.welcomeStep + 1 < Store.welcomeSteps ? "Suivant" : "Terminer") { store.nextWelcome() }
+                        .buttonStyle(Pill(primary: true))
+                }
+            }
+            .id(store.welcomeStep)
+            .transition(.opacity)
+            .padding(.leading, 100)
+            .padding(.trailing, 16)
+            .padding(.vertical, 12)
+        }
+    }
+
+    private func key(_ k: String, _ what: String) -> some View {
+        HStack(spacing: 8) {
+            Text(k).font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                .padding(.horizontal, 6).frame(height: 19)
+                .background(RoundedRectangle(cornerRadius: 5).fill(.white.opacity(0.1)))
+            Text(what).font(Fonts.label).foregroundStyle(Color.soft)
+        }
     }
 }
 
