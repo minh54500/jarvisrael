@@ -18,8 +18,6 @@ build/icon build/Encoche.iconset
 iconutil -c icns build/Encoche.iconset -o $RES/Encoche.icns
 
 cp hook/hook.py $RES/
-# Jingle joué au lancement (assets/jingle.mp3, .m4a, .wav…), s'il y en a un.
-for f in assets/jingle.*(N); do cp "$f" $RES/; done
 
 cat > $APP/Contents/Info.plist <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

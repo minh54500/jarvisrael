@@ -302,7 +302,6 @@ final class Store: ObservableObject {
     }
 
     func mochiTapped() {
-        if LaunchMusic.playing { return LaunchMusic.stop() }  // un clic coupe la musique de lancement
         guard mode == .expanded else { return expandDefault() }
         let now = Date()
         slaps = slaps.filter { now.timeIntervalSince($0) < 1.7 } + [now]
