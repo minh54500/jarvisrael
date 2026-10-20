@@ -406,11 +406,15 @@ final class Store: ObservableObject {
         if on {
             lastActivity = Date()
             mochi.blink()
+        } else if !hovering && !pinned {
+            // On referme d'abord, et on rend le clavier une fois l'encoche fermée : rendre le clavier
+            // la retire un instant de l'écran, ce qui se verrait sur l'encoche ouverte.
+            collapse()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                if !self.composing { self.releaseKeyboard() }
+            }
         } else {
             releaseKeyboard()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                if !self.hovering && !self.pinned { self.collapse() }
-            }
         }
     }
 
@@ -448,10 +452,13 @@ final class Store: ObservableObject {
 
     /// Le champ d'écriture doit prendre le clavier dès qu'il est affiché (raccourci, capture).
     @Published var wantsFocus = false
+    private var lastSummon = Date.distantPast
 
     /// ⌥Espace : l'encoche s'ouvre prête à écrire à la session choisie (⌥⇧Espace : en dictant).
     /// Un deuxième appui la referme.
     func summon(dictate: Bool) {
+        guard Date().timeIntervalSince(lastSummon) > 0.4 else { return }  // appuis trop rapprochés
+        lastSummon = Date()
         if mode == .expanded && (composing || Voice.shared.listening) {
             Voice.shared.stop()
             if composing { setComposing(false) } else { collapse() }

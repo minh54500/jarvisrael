@@ -37,17 +37,24 @@ struct ComposeField: NSViewRepresentable {
             f.stringValue = text
             f.currentEditor()?.selectedRange = NSRange(location: (text as NSString).length, length: 0)  // curseur à la fin
         }
-        if focus { grab(f, tries: 10) }
+        if focus && !context.coordinator.grabbing {
+            context.coordinator.grabbing = true
+            grab(f, context.coordinator, tries: 10)
+        }
     }
 
     /// Prend le clavier dès que le champ est dans la fenêtre (il peut être en train d'apparaître).
-    private func grab(_ f: FieldView, tries: Int) {
+    /// Une seule tentative à la fois, et rien si le champ écrit déjà : le reprendre couperait l'écriture
+    /// en cours, et l'encoche rendrait puis reprendrait le clavier (elle clignoterait).
+    private func grab(_ f: FieldView, _ coordinator: Coordinator, tries: Int) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             guard let panel = f.window as? NotchPanel else {
-                if tries > 0 { grab(f, tries: tries - 1) }
+                if tries > 0 { grab(f, coordinator, tries: tries - 1) } else { coordinator.grabbing = false }
                 return
             }
+            coordinator.grabbing = false
             onFocused()
+            guard f.currentEditor() == nil else { return }
             panel.takeKeyboard()
             panel.makeFirstResponder(f)
             f.currentEditor()?.selectedRange = NSRange(location: (f.stringValue as NSString).length, length: 0)
@@ -58,6 +65,7 @@ struct ComposeField: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: ComposeField
+        var grabbing = false
         init(_ parent: ComposeField) { self.parent = parent }
 
         func controlTextDidChange(_ n: Notification) {
