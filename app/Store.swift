@@ -1153,7 +1153,6 @@ final class Store: ObservableObject {
                 Tes sessions apparaîtront dans l'encoche, et tu pourras autoriser ou refuser les actions de Claude d'ici.
 
                 Si l'app n'est pas ouverte, Claude Code fonctionne exactement comme avant.
-                Pense à quitter Coucou pendant que tu utilises Encoche, sinon les deux te demanderont les mêmes permissions.
                 """
             alert.addButton(withTitle: "Brancher")
             alert.addButton(withTitle: "Annuler")

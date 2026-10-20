@@ -1444,11 +1444,15 @@ private struct UploadPanel: View {
     @ObservedObject var store: Store
     var body: some View {
         HStack(spacing: 10) {
+            // « Convertir » utilise l'app Convertisseur : sans elle, toute la place est pour l'étagère.
+            let converter = Store.engine != nil
             DropZone(targeted: $store.dropKeep, color: "#3B9EFF", title: "Garder ici",
                      tags: ["Le temps de le coller ailleurs"], leading: 112) { store.keep($0) }
-                .frame(width: 300)
-            DropZone(targeted: $store.dropTargeted, color: "#34D399", title: "Convertir",
-                     tags: ["WebP", "JPG", "PDF"], leading: 18) { store.dropped($0) }
+                .frame(width: converter ? 300 : nil)
+            if converter {
+                DropZone(targeted: $store.dropTargeted, color: "#34D399", title: "Convertir",
+                         tags: ["WebP", "JPG", "PDF"], leading: 18) { store.dropped($0) }
+            }
         }
     }
 }
