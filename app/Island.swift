@@ -229,6 +229,7 @@ struct IslandContent: View {
                 case .converting: ConvertingPanel(store: store)
                 case .result: ResultPanel(store: store)
                 case .shelf: ShelfPanel(store: store)
+                case .music: MusicPanel(store: store)
                 }
             }
             .id(store.view)
@@ -242,41 +243,110 @@ struct IslandContent: View {
         .animation(store.mode == .expanded ? .easeOut(duration: 0.22).delay(0.06) : .easeIn(duration: 0.1), value: store.mode)
         .allowsHitTesting(store.mode == .expanded)
         .environment(\.colorScheme, .dark)
-        .foregroundStyle(Color(hex: "#F5F6F8"))
-        .font(.system(size: 13))
+        .foregroundStyle(Color.ink)
+        .font(Fonts.body)
     }
 
-    /// Bandeau à hauteur de l'encoche : les éléments restent de part et d'autre de la caméra.
+    /// Bandeau à hauteur de l'encoche : les onglets à gauche de la caméra, l'état et le son à droite.
     private var header: some View {
-        HStack {
-            Text("Encoche").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Color(hex: "#7B8089"))
+        HStack(spacing: 0) {
+            Tabs(store: store)
             Spacer()
             let n = store.sessions.filter { $0.state == .working || $0.state == .approval || $0.state == .waiting }.count
-            if n > 0 { Text("\(n) en cours").font(.system(size: 11.5)).foregroundStyle(Color(hex: "#7B8089")) }
-            Button { store.toggleShelf() } label: {
-                HStack(spacing: 3) {
-                    Image(systemName: store.shelf.isEmpty ? "tray" : "tray.full.fill").font(.system(size: 11.5))
-                    if !store.shelf.isEmpty { Text("\(store.shelf.count)").font(.system(size: 11, weight: .semibold)) }
+            if n > 0 {
+                HStack(spacing: 5) {
+                    PulseDot(color: .success)
+                    Text("\(n) en cours").font(Fonts.caption).foregroundStyle(Color.muted)
                 }
-                .foregroundStyle(store.view == .shelf ? Color(hex: "#F5F6F8") : Color(hex: "#8E939C"))
-                .frame(minWidth: 24, minHeight: 24)
-                .contentShape(Rectangle())
+                .padding(.trailing, 6)
             }
-            .buttonStyle(.plain)
-            .help("Étagère : les fichiers gardés dans l'encoche")
             Button {
                 Sound.shared.on.toggle()
                 store.objectWillChange.send()
                 Sound.shared.play("blip")
             } label: {
                 Image(systemName: Sound.shared.on ? "speaker.wave.2.fill" : "speaker.slash.fill")
-                    .font(.system(size: 12)).foregroundStyle(Color(hex: "#8E939C")).frame(width: 24, height: 24)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .contentTransition(.symbolEffect(.replace))
             }
-            .buttonStyle(.plain)
-            .help("Son")
+            .buttonStyle(IconButton())
+            .help(Sound.shared.on ? "Couper le son" : "Activer le son")
+            .accessibilityLabel(Sound.shared.on ? "Couper le son" : "Activer le son")
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, 12)
         .frame(height: store.notch.height)
+    }
+}
+
+// MARK: - Onglets du bandeau
+
+/// Claude · Musique · Étagère. L'onglet actif s'élargit avec son nom ; la pastille glisse de l'un à l'autre.
+private struct Tabs: View {
+    @ObservedObject var store: Store
+    @ObservedObject var spotify = Spotify.shared
+    @Namespace private var ns
+
+    private enum Tab { case claude, music, shelf }
+
+    private var current: Tab {
+        switch store.view {
+        case .music: .music
+        case .shelf: .shelf
+        default: .claude
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 2) {
+            let busy = store.sessions.contains { $0.state == .working || $0.state == .approval || $0.state == .waiting }
+            item(.claude, icon: "sparkle", title: "Claude", badge: nil, live: busy) { store.goToClaude() }
+            item(.music, icon: spotify.playing ? "waveform" : "music.note", title: "Musique", badge: nil, live: spotify.playing) {
+                store.goTo(.music)
+            }
+            item(.shelf, icon: store.shelf.isEmpty ? "tray" : "tray.full.fill", title: "Étagère",
+                 badge: store.shelf.isEmpty ? nil : "\(store.shelf.count)", live: false) { store.goTo(.shelf) }
+        }
+        .animation(.spring(response: 0.34, dampingFraction: 0.8), value: current)
+    }
+
+    private func item(_ tab: Tab, icon: String, title: String, badge: String?, live: Bool, action: @escaping () -> Void) -> some View {
+        let active = current == tab
+        return Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .semibold))
+                    .symbolEffect(.variableColor.iterative, isActive: live && tab == .music)
+                if active { Text(title).font(Fonts.labelBold).transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .leading))) }
+                if let badge { Text(badge).font(.system(size: 10.5, weight: .bold)).monospacedDigit() }
+            }
+            .foregroundStyle(active ? Color.ink : tab == .music && live ? Color.spotify : Color.muted)
+            .overlay(alignment: .topTrailing) {
+                if live && tab == .claude && !active { Circle().fill(Color.success).frame(width: 5, height: 5).offset(x: 4, y: -2) }
+            }
+            .padding(.horizontal, active ? 10 : 8)
+            .frame(height: 24)
+            .background {
+                if active { Capsule().fill(.white.opacity(0.13)).matchedGeometryEffect(id: "tab", in: ns) }
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(HoverDim())
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(active ? .isSelected : [])
+    }
+}
+
+/// Point qui respire : « quelque chose tourne ».
+private struct PulseDot: View {
+    let color: Color
+    @State private var on = false
+    @Environment(\.accessibilityReduceMotion) private var still
+
+    var body: some View {
+        Circle().fill(color).frame(width: 6, height: 6)
+            .background(Circle().fill(color.opacity(0.35)).scaleEffect(on && !still ? 2.2 : 1).opacity(on && !still ? 0 : 1))
+            .onAppear { withAnimation(.easeOut(duration: 1.4).repeatForever(autoreverses: false)) { on = true } }
     }
 }
 
@@ -287,32 +357,87 @@ struct Card<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .background {
                 ZStack {
-                    Color(hex: "#141518")
+                    Color.surface
                     if let wash {
                         RadialGradient(colors: [wash, .clear], center: UnitPoint(x: 0.5, y: 1.3), startRadius: 0, endRadius: 380)
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .clipShape(shape)
             }
-            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(.white.opacity(0.035)))
+            // Liseré plus clair en haut : la carte semble éclairée par le dessus, comme du verre.
+            .overlay(shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.09), .white.opacity(0.02)],
+                                                       startPoint: .top, endPoint: .bottom), lineWidth: 1))
     }
 }
 
 struct Pill: ButtonStyle {
     var primary = false
-    func makeBody(configuration: Configuration) -> some View {
+    func makeBody(configuration: Configuration) -> some View { PillBody(configuration: configuration, primary: primary) }
+}
+
+private struct PillBody: View {
+    let configuration: ButtonStyleConfiguration
+    let primary: Bool
+    @State private var hover = false
+
+    var body: some View {
         configuration.label
-            .font(.system(size: 12.5, weight: .medium))
+            .font(Fonts.button)
             .lineLimit(1)
-            .padding(.horizontal, 13)
-            .padding(.vertical, 7)
-            .foregroundStyle(primary ? Color(hex: "#0B0C0E") : Color(hex: "#F1F2F4"))
-            .background(Capsule().fill(primary ? Color(hex: "#F5F6F8") : .white.opacity(configuration.isPressed ? 0.2 : 0.09)))
+            .padding(.horizontal, 14)
+            .frame(minHeight: 28)
+            .foregroundStyle(primary ? Color.onLight : Color.ink)
+            .background(Capsule().fill(primary ? Color.ink.opacity(hover ? 0.88 : 1)
+                                               : .white.opacity(configuration.isPressed ? 0.2 : hover ? 0.14 : 0.09)))
+            .overlay(Capsule().strokeBorder(.white.opacity(primary ? 0 : 0.06)))
+            .contentShape(Capsule())
             .scaleEffect(configuration.isPressed ? 0.95 : 1)
+            .onHover { hover = $0 }
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+            .animation(.easeOut(duration: 0.15), value: hover)
+    }
+}
+
+/// Bouton-icône rond de 28 pt, éclairé au survol.
+struct IconButton: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { IconBody(configuration: configuration) }
+}
+
+private struct IconBody: View {
+    let configuration: ButtonStyleConfiguration
+    @State private var hover = false
+
+    var body: some View {
+        configuration.label
+            .foregroundStyle(hover ? Color.ink : Color.muted)
+            .frame(width: 28, height: 28)
+            .background(Circle().fill(.white.opacity(configuration.isPressed ? 0.16 : hover ? 0.09 : 0)))
+            .contentShape(Circle())
+            .scaleEffect(configuration.isPressed ? 0.92 : 1)
+            .onHover { hover = $0 }
+            .animation(.easeOut(duration: 0.15), value: hover)
+    }
+}
+
+/// Bouton sans fond : s'éclaircit au survol, se tasse au clic.
+private struct HoverDim: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { HoverDimBody(configuration: configuration) }
+}
+
+private struct HoverDimBody: View {
+    let configuration: ButtonStyleConfiguration
+    @State private var hover = false
+
+    var body: some View {
+        configuration.label
+            .brightness(hover ? 0.12 : 0)
+            .scaleEffect(configuration.isPressed ? 0.94 : 1)
+            .onHover { hover = $0 }
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
@@ -324,19 +449,19 @@ private struct Who: View {
         HStack(spacing: 7) {
             Circle().fill(Color(hex: session?.color ?? "#FFFFFF")).frame(width: 8, height: 8)
             if let session { Text(session.name).fontWeight(.semibold) }
-            Text(suffix).foregroundStyle(Color(hex: "#8E939C"))
+            Text(suffix).foregroundStyle(Color.muted)
         }
-        .font(.system(size: 12))
+        .font(Fonts.label)
         .lineLimit(1)
     }
 }
 
 private func big(_ s: String) -> some View {
-    Text(s).font(.system(size: 15, weight: .semibold)).lineLimit(2)
+    Text(s).font(Fonts.title).lineLimit(2)
 }
 
 private func sub(_ s: String, red: Bool = false) -> some View {
-    Text(s).foregroundStyle(red ? Color(hex: "#FF8D97") : Color(hex: "#9398A1")).lineLimit(2)
+    Text(s).foregroundStyle(red ? Color.danger : Color.muted).lineLimit(2)
 }
 
 // MARK: - Vues
@@ -373,19 +498,17 @@ private struct OverviewPanel: View {
                         Spacer(minLength: 4)
                         if let s = store.focused {
                             Button { store.jump(to: s) } label: {
-                                Image(systemName: "arrow.up.right").font(.system(size: 9.5, weight: .bold))
-                                    .foregroundStyle(Color(hex: "#A9ADB5"))
-                                    .frame(width: 22, height: 22)
-                                    .background(Circle().fill(.white.opacity(0.07)))
+                                Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .bold))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(IconButton())
                             .help("Ouvrir dans VS Code")
+                            .accessibilityLabel("Ouvrir \(s.name) dans VS Code")
                         }
                     }
                     if let notice = store.notice {
                         Text(notice.text)
-                            .font(.system(size: 12.5, weight: .medium))
-                            .foregroundStyle(notice.ok ? Color(hex: "#5EE0AE") : Color(hex: "#FF8D97"))
+                            .font(Fonts.lead)
+                            .foregroundStyle(notice.ok ? Color.success : Color.danger)
                             .lineLimit(2)
                             .transition(.opacity)
                     } else {
@@ -394,12 +517,12 @@ private struct OverviewPanel: View {
                             ForEach(Array(lines.enumerated()), id: \.offset) { i, line in
                                 let current = i == lines.count - 1
                                 Text(current ? (store.focused?.line ?? line) : line)
-                                    .font(.system(size: current ? 13.5 : 12, weight: current ? .medium : .regular))
-                                    .foregroundStyle(current ? Color(hex: "#F5F6F8") : Color(hex: "#5F646D"))
+                                    .font(current ? Fonts.lead : Fonts.label)
+                                    .foregroundStyle(current ? Color.ink : Color.faint)
                                     .lineLimit(1)
                                     .truncationMode(.tail)
                             }
-                            if lines.isEmpty { Text(store.focused?.line ?? "").foregroundStyle(Color(hex: "#9398A1")) }
+                            if lines.isEmpty { Text(store.focused?.line ?? "").foregroundStyle(Color.muted) }
                         }
                         .transition(.opacity)
                     }
@@ -415,23 +538,7 @@ private struct OverviewPanel: View {
             Card {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(store.sessions.prefix(4)) { s in
-                        let chosen = s.id == store.focused?.id
-                        Button { store.select(s) } label: {
-                            HStack(spacing: 8) {
-                                Circle().fill(Color(hex: s.color)).frame(width: 8, height: 8)
-                                Text(s.name).fontWeight(.medium).lineLimit(1)
-                                Spacer(minLength: 6)
-                                Text(label(s.state)).font(.system(size: 11.5)).foregroundStyle(Color(hex: STYLES[s.state]?.col ?? "#9398A1"))
-                                    .lineLimit(1)
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 7)
-                            .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(chosen ? 0.13 : 0.05)))
-                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(chosen ? 0.1 : 0)))
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .help("Écrire à \(s.name)")
+                        SessionRow(session: s, chosen: s.id == store.focused?.id, state: label(s.state)) { store.select(s) }
                     }
                 }
                 .padding(10)
@@ -452,6 +559,49 @@ private struct OverviewPanel: View {
     }
 }
 
+/// Une session dans la liste de droite : sa couleur, son nom, son état en pastille.
+private struct SessionRow: View {
+    let session: Session
+    let chosen: Bool
+    let state: String
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        let tint = Color(hex: STYLES[session.state]?.col ?? "#9A9FA8")
+        let busy = session.state == .working || session.state == .approval || session.state == .waiting
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Circle().fill(Color(hex: session.color)).frame(width: 8, height: 8)
+                Text(session.name).fontWeight(.medium).lineLimit(1)
+                Spacer(minLength: 6)
+                HStack(spacing: 4) {
+                    if busy { PulseDot(color: tint) }
+                    Text(state).lineLimit(1)
+                }
+                .font(Fonts.caption)
+                .foregroundStyle(tint)
+                .padding(.horizontal, 7)
+                .frame(height: 20)
+                .background(Capsule().fill(tint.opacity(0.12)))
+            }
+            .padding(.leading, 10)
+            .padding(.trailing, 5)
+            .frame(height: 32)
+            .background(RoundedRectangle(cornerRadius: Radius.item, style: .continuous)
+                .fill(.white.opacity(chosen ? 0.12 : hover ? 0.08 : 0.04)))
+            .overlay(RoundedRectangle(cornerRadius: Radius.item, style: .continuous).strokeBorder(.white.opacity(chosen ? 0.1 : 0)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.15), value: hover)
+        .help("Écrire à \(session.name)")
+        .accessibilityLabel("\(session.name), \(state)")
+        .accessibilityAddTraits(chosen ? .isSelected : [])
+    }
+}
+
 /// Champ « Écris à Claude… » et bouton d'envoi, en bas de la section de gauche.
 private struct ComposeBar: View {
     @ObservedObject var store: Store
@@ -465,17 +615,18 @@ private struct ComposeBar: View {
                 .frame(height: 18)
             Button { store.submitDraft() } label: {
                 Group {
-                    if store.sending { ProgressView().controlSize(.mini).tint(Color(hex: "#0B0C0E")) }
+                    if store.sending { ProgressView().controlSize(.mini).tint(Color.onLight) }
                     else { Image(systemName: "arrow.up").font(.system(size: 11, weight: .bold)) }
                 }
-                .foregroundStyle(Color(hex: "#0B0C0E"))
+                .foregroundStyle(Color.onLight)
                 .frame(width: 22, height: 22)
-                .background(Circle().fill(Color(hex: "#F5F6F8")))
+                .background(Circle().fill(Color.ink))
             }
             .buttonStyle(.plain)
             .opacity(empty && !store.sending ? 0.3 : 1)
             .disabled(empty || store.sending)
             .help("Envoyer à Claude (Entrée)")
+            .accessibilityLabel("Envoyer à Claude")
         }
         .padding(.leading, 11)
         .padding(.trailing, 5)
@@ -495,11 +646,11 @@ private struct ShelfPanel: View {
                 HStack {
                     if let notice = store.notice {
                         Text(notice.text).font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(notice.ok ? Color(hex: "#5EE0AE") : Color(hex: "#FF8D97")).lineLimit(1)
+                            .foregroundStyle(notice.ok ? Color.success : Color.danger).lineLimit(1)
                     } else {
                         Text(store.shelf.isEmpty ? "Glisse un fichier sur l'encoche pour le garder ici."
                                                  : "Glisse-les où tu veux, ou clique pour copier.")
-                            .font(.system(size: 12)).foregroundStyle(Color(hex: "#9398A1")).lineLimit(1)
+                            .font(.system(size: 12)).foregroundStyle(Color.muted).lineLimit(1)
                     }
                     Spacer()
                     if !store.shelf.isEmpty {
@@ -511,7 +662,7 @@ private struct ShelfPanel: View {
                     ForEach(store.shelf.suffix(6).reversed(), id: \.self) { url in ShelfItem(store: store, url: url) }
                     if store.shelf.count > 6 {
                         Text("+\(store.shelf.count - 6)").font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Color(hex: "#9398A1")).padding(.leading, 4)
+                            .foregroundStyle(Color.muted).padding(.leading, 4)
                     }
                 }
             }
@@ -533,8 +684,8 @@ private struct ShelfItem: View {
                 .resizable().interpolation(.high)
                 .frame(width: 40, height: 40)
             Text(url.lastPathComponent)
-                .font(.system(size: 10.5))
-                .foregroundStyle(Color(hex: "#C9CCD2"))
+                .font(Fonts.caption)
+                .foregroundStyle(Color.soft)
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
                 .truncationMode(.middle)
@@ -547,12 +698,13 @@ private struct ShelfItem: View {
             if hover {
                 Button { store.unshelve(url) } label: {
                     Image(systemName: "xmark").font(.system(size: 7.5, weight: .bold))
-                        .foregroundStyle(Color(hex: "#F5F6F8"))
+                        .foregroundStyle(Color.ink)
                         .frame(width: 16, height: 16)
                         .background(Circle().fill(Color(hex: "#3A3D44")))
                 }
                 .buttonStyle(.plain)
                 .help("Retirer de l'étagère")
+                .accessibilityLabel("Retirer \(url.lastPathComponent) de l'étagère")
                 .offset(x: 3, y: -3)
             }
         }
@@ -570,6 +722,147 @@ private struct ShelfItem: View {
             Button("Retirer de l'étagère") { store.unshelve(url) }
         }
         .help(url.path)
+    }
+}
+
+/// Spotify : pochette, morceau, progression et commandes.
+private struct MusicPanel: View {
+    @ObservedObject var store: Store
+    @ObservedObject var spotify = Spotify.shared
+
+    var body: some View {
+        Card(wash: Color(hex: "#1DB954", spotify.playing ? 0.34 : 0.16)) {
+            Group {
+                if let t = spotify.track { player(t) } else { idle }
+            }
+            .padding(.leading, 100)
+            .padding(.trailing, 16)
+        }
+        .animation(.easeOut(duration: 0.4), value: spotify.playing)
+    }
+
+    private func player(_ t: Spotify.Track) -> some View {
+        HStack(spacing: 14) {
+            Button { spotify.open() } label: { cover }
+                .buttonStyle(.plain)
+                .help("Ouvrir Spotify")
+            VStack(alignment: .leading, spacing: 3) {
+                Text(t.name).font(.system(size: 14.5, weight: .semibold)).lineLimit(1)
+                if spotify.denied {
+                    sub("Autorise Encoche à piloter Spotify : Réglages Système → Confidentialité → Automatisation.", red: true)
+                        .font(Fonts.caption)
+                } else {
+                    Text(t.artist).foregroundStyle(Color.muted).lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                MusicProgress(spotify: spotify)
+            }
+            .frame(height: 76)
+            HStack(spacing: 2) {
+                Button { spotify.previous() } label: { Image(systemName: "backward.fill") }
+                    .buttonStyle(RoundControl()).help("Morceau précédent").accessibilityLabel("Morceau précédent")
+                Button {
+                    if !spotify.playing { store.mochi.emote(.happy, 0.8) }
+                    spotify.playPause()
+                } label: { Image(systemName: spotify.playing ? "pause.fill" : "play.fill") }
+                    .buttonStyle(RoundControl(primary: true)).help(spotify.playing ? "Pause" : "Lecture")
+                    .accessibilityLabel(spotify.playing ? "Pause" : "Lecture")
+                Button { spotify.next() } label: { Image(systemName: "forward.fill") }
+                    .buttonStyle(RoundControl()).help("Morceau suivant").accessibilityLabel("Morceau suivant")
+            }
+        }
+    }
+
+    private var cover: some View {
+        Group {
+            if let img = spotify.artwork {
+                Image(nsImage: img).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
+            } else {
+                ZStack {
+                    Color.white.opacity(0.07)
+                    Image(systemName: "music.note").font(.system(size: 24)).foregroundStyle(Color.faint)
+                }
+            }
+        }
+        .frame(width: 76, height: 76)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(.white.opacity(0.06)))
+    }
+
+    private var idle: some View {
+        HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 5) {
+                big(spotify.running ? "Rien ne joue sur Spotify." : "Spotify n'est pas ouvert.")
+                sub(spotify.running ? "Lance un morceau, il s'affichera ici." : "Ouvre-le pour piloter ta musique d'ici.")
+            }
+            Spacer()
+            if spotify.running {
+                Button("Lecture") { spotify.playPause() }.buttonStyle(Pill(primary: true))
+            } else {
+                Button("Ouvrir Spotify") { spotify.open() }.buttonStyle(Pill(primary: true))
+            }
+        }
+    }
+}
+
+/// Barre de lecture : avance toute seule, un clic déplace la lecture.
+private struct MusicProgress: View {
+    @ObservedObject var spotify: Spotify
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.5)) { timeline in
+            let d = max(1, spotify.track?.duration ?? 1), p = spotify.position(at: timeline.date)
+            VStack(spacing: 2) {
+                GeometryReader { g in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(.white.opacity(0.1))
+                        Capsule().fill(Color.ink).frame(width: max(4, g.size.width * p / d))
+                    }
+                    .frame(height: 4)
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .onTapGesture(coordinateSpace: .local) { at in
+                        spotify.seek(to: clamp(at.x / g.size.width, 0, 1) * d)
+                    }
+                }
+                .frame(height: 12)
+                HStack {
+                    Text(time(p))
+                    Spacer()
+                    Text(time(d))
+                }
+                .font(Fonts.captionMono)
+                .foregroundStyle(Color.faint)
+            }
+        }
+    }
+
+    private func time(_ s: Double) -> String { String(format: "%d:%02d", Int(s) / 60, Int(s) % 60) }
+}
+
+private struct RoundControl: ButtonStyle {
+    var primary = false
+    func makeBody(configuration: Configuration) -> some View { RoundBody(configuration: configuration, primary: primary) }
+}
+
+private struct RoundBody: View {
+    let configuration: ButtonStyleConfiguration
+    let primary: Bool
+    @State private var hover = false
+
+    var body: some View {
+        configuration.label
+            .font(.system(size: primary ? 14 : 12.5, weight: .bold))
+            .contentTransition(.symbolEffect(.replace))
+            .foregroundStyle(primary ? Color.onLight : Color.ink)
+            .frame(width: primary ? 38 : 32, height: primary ? 38 : 32)
+            .background(Circle().fill(primary ? Color.ink.opacity(hover ? 0.88 : 1)
+                                              : .white.opacity(configuration.isPressed ? 0.16 : hover ? 0.09 : 0.0001)))
+            .contentShape(Circle())
+            .scaleEffect(configuration.isPressed ? 0.9 : 1)
+            .onHover { hover = $0 }
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+            .animation(.easeOut(duration: 0.15), value: hover)
     }
 }
 
@@ -593,7 +886,7 @@ private struct ApprovalPanel: View {
                         Button("Toujours autoriser") { store.answer("always") }.buttonStyle(Pill())
                         Button("Autoriser") { store.answer("allow") }.buttonStyle(Pill(primary: true))
                         if store.permissions.count > 1 {
-                            Text("+\(store.permissions.count - 1) en attente").font(.system(size: 11.5)).foregroundStyle(Color(hex: "#9398A1"))
+                            Text("+\(store.permissions.count - 1) en attente").font(Fonts.caption).foregroundStyle(Color.muted)
                         }
                     }
                 }
@@ -670,7 +963,7 @@ private struct DropZone: View {
     var body: some View {
         ZStack(alignment: .leading) {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color(hex: "#121316"))
+                .fill(Color.sunken)
                 .overlay {
                     RadialGradient(colors: [Color(hex: color, targeted ? 0.6 : 0.22), .clear],
                                    center: UnitPoint(x: 0.5, y: 1.4), startRadius: 0, endRadius: 300)
@@ -683,7 +976,7 @@ private struct DropZone: View {
                 big(title)
                 HStack(spacing: 6) {
                     ForEach(tags, id: \.self) {
-                        Text($0).font(.system(size: 11)).foregroundStyle(Color(hex: "#B9BDC4")).lineLimit(1)
+                        Text($0).font(.system(size: 11)).foregroundStyle(Color.soft).lineLimit(1)
                             .padding(.horizontal, 8).padding(.vertical, 3)
                             .background(Capsule().fill(.white.opacity(0.07)))
                     }
@@ -739,9 +1032,9 @@ private struct ConvertingPanel: View {
         Card(wash: Color(hex: "#34D399", 0.3)) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text("Conversion de ").foregroundStyle(Color(hex: "#A9ADB5")) + Text(store.progressLabel).fontWeight(.semibold)
+                    Text("Conversion de ").foregroundStyle(Color.soft) + Text(store.progressLabel).fontWeight(.semibold)
                     Spacer()
-                    Text("\(Int(store.progress * 100)) %").font(.system(size: 12.5, design: .monospaced)).foregroundStyle(Color(hex: "#A9ADB5"))
+                    Text("\(Int(store.progress * 100)) %").font(.system(size: 12.5, design: .monospaced)).foregroundStyle(Color.soft)
                 }
                 GeometryReader { g in
                     ZStack(alignment: .leading) {

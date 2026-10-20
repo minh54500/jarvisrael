@@ -26,7 +26,7 @@ struct Permission: Identifiable {
 }
 
 enum Mode { case hidden, compact, expanded }
-enum Panel: Equatable { case greeting, overview, empty, approval, finished, error, upload, choose, converting, result, shelf }
+enum Panel: Equatable { case greeting, overview, empty, approval, finished, error, upload, choose, converting, result, shelf, music }
 
 private let PALETTE = ["#FF6B5B", "#2DD4A7", "#F7B32B", "#A78BFA", "#38BDF8", "#F472B6"]
 
@@ -99,7 +99,7 @@ final class Store: ObservableObject {
         case .empty: 150
         case .approval: 206
         case .finished, .error, .choose: 176
-        case .upload, .shelf: 176
+        case .upload, .shelf, .music: 176
         case .converting, .result: 150
         }
         return base + max(0, notch.height - 32)
@@ -163,12 +163,23 @@ final class Store: ObservableObject {
         return false
     }
 
-    private var defaultView: Panel { !sessions.isEmpty ? .overview : shelf.isEmpty ? .empty : .shelf }
+    private var defaultView: Panel {
+        if !sessions.isEmpty { return .overview }
+        if Spotify.shared.track != nil { return .music }
+        return shelf.isEmpty ? .empty : .shelf
+    }
 
-    /// Bouton de l'étagère dans le bandeau : ouvre l'étagère, ou revient à la vue normale.
-    func toggleShelf() {
-        Sound.shared.play("blip")
-        withAnimation(Self.openAnimation) { view = view == .shelf ? (sessions.isEmpty ? .empty : .overview) : .shelf }
+    /// Onglets du bandeau : Claude, Musique, Étagère.
+    func goTo(_ p: Panel) {
+        guard view != p else { return }
+        Sound.shared.play("tick")
+        if p == .music { Spotify.shared.refresh() }
+        withAnimation(Self.openAnimation) { view = p }
+    }
+
+    /// Onglet Claude : la demande d'autorisation en attente d'abord, sinon les sessions.
+    func goToClaude() {
+        goTo(!permissions.isEmpty ? .approval : sessions.isEmpty ? .empty : .overview)
     }
 
     func expandDefault() {

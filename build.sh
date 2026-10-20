@@ -33,6 +33,7 @@ cat > $APP/Contents/Info.plist <<EOF
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSAppleEventsUsageDescription</key><string>Encoche pilote Spotify depuis l'encoche : lecture, pause, morceau suivant.</string>
 </dict></plist>
 EOF
 codesign --force --deep -s - $APP 2>/dev/null || true
@@ -44,4 +45,5 @@ cp -R $APP ~/Applications/
 # Signature ad hoc = nouvelle identité à chaque build : l'ancienne autorisation « Accessibilité »
 # ne vaut plus. On l'efface pour que macOS la redemande proprement au premier envoi.
 tccutil reset Accessibility io.github.minh54500.encoche >/dev/null 2>&1 || true
+tccutil reset AppleEvents io.github.minh54500.encoche >/dev/null 2>&1 || true  # idem pour piloter Spotify
 echo "✓ Installé : ~/Applications/Encoche.app (v$VERSION)"
