@@ -94,6 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bridge.start()
         Bridge.installHookScript()
         store.refreshHooked()
+        store.restoreSessions()
 
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.track() }

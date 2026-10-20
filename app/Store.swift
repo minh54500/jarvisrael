@@ -711,6 +711,7 @@ final class Store: ObservableObject {
 
     func handle(_ ev: [String: Any], _ responder: Responder?) {
         let event = ev["hook_event_name"] as? String ?? ""
+        if event == "EncocheDebug" { return responder?.reply(debugState) ?? () }
         let sid = ev["session_id"] as? String ?? "inconnue"
         let cwd = ev["cwd"] as? String ?? NSHomeDirectory()
         lastActivity = Date()
@@ -720,6 +721,7 @@ final class Store: ObservableObject {
         if event == "SessionEnd" {
             ended.insert(sid)
             sessions.removeAll { $0.id == sid }
+            saveSessions()
             minis[sid] = nil
             for p in permissions where p.session == sid { p.responder.close() }
             permissions.removeAll { $0.session == sid }
@@ -917,6 +919,13 @@ final class Store: ObservableObject {
         }
     }
 
+    /// Ce que l'app voit, pour le diagnostic (événement « EncocheDebug » sur le socket).
+    private var debugState: [String: Any] {
+        ["mode": "\(mode)", "view": "\(view)", "hooked": hooked, "permissions": permissions.count, "ended": Array(ended),
+         "sessions": sessions.map { ["id": $0.id, "name": $0.name, "state": $0.state.rawValue, "entrypoint": $0.entrypoint,
+                                    "line": $0.line, "updated": $0.updated.timeIntervalSince1970] }]
+    }
+
     private func newSession(_ id: String, _ cwd: String) -> Session {
         let color = PALETTE[sessions.count % PALETTE.count]
         let m = Mochi(mini: true, bodyColor: color, now: CACurrentMediaTime())
@@ -926,8 +935,50 @@ final class Store: ObservableObject {
     }
 
     private func store(_ s: Session) {
+        let isNew = !sessions.contains { $0.id == s.id }
         if let i = sessions.firstIndex(where: { $0.id == s.id }) { sessions[i] = s } else { sessions.append(s) }
         minis[s.id]?.setState(s.state)
+        if isNew || Date().timeIntervalSince(savedAt) > 30 { saveSessions() }
+    }
+
+    // MARK: Sessions gardées d'un lancement à l'autre
+
+    private var savedAt = Date.distantPast
+
+    /// Les sessions ouvertes sont notées : après un redémarrage (mise à jour…), l'encoche les retrouve
+    /// sans attendre que Claude fasse quelque chose.
+    private func saveSessions() {
+        savedAt = Date()
+        UserDefaults.standard.set(sessions.map {
+            ["id": $0.id, "cwd": $0.cwd, "name": $0.name, "color": $0.color, "term": $0.termProgram,
+             "entrypoint": $0.entrypoint, "model": $0.model, "transcript": $0.transcript, "updated": $0.updated.timeIntervalSince1970]
+        }, forKey: "sessions")
+    }
+
+    /// Au lancement : les sessions encore vivantes (historique modifié il y a moins de 12 h), au repos.
+    func restoreSessions() {
+        let fm = FileManager.default, limit = Date().addingTimeInterval(-12 * 3600)
+        for d in UserDefaults.standard.array(forKey: "sessions") as? [[String: Any]] ?? [] {
+            guard let id = d["id"] as? String, let cwd = d["cwd"] as? String, !sessions.contains(where: { $0.id == id }) else { continue }
+            let transcript = d["transcript"] as? String ?? ""
+            let touched = (try? fm.attributesOfItem(atPath: transcript)[.modificationDate] as? Date)
+                ?? Date(timeIntervalSince1970: d["updated"] as? Double ?? 0)
+            guard touched > limit else { continue }
+            let color = d["color"] as? String ?? PALETTE[sessions.count % PALETTE.count]
+            var s = Session(id: id, cwd: cwd, name: d["name"] as? String ?? URL(fileURLWithPath: cwd).lastPathComponent, color: color)
+            s.termProgram = d["term"] as? String ?? ""
+            s.entrypoint = d["entrypoint"] as? String ?? ""
+            s.model = d["model"] as? String ?? ""
+            s.transcript = transcript
+            s.updated = touched
+            minis[id] = Mochi(mini: true, bodyColor: color, now: CACurrentMediaTime())
+            sessions.append(s)
+        }
+        saveSessions()
+        guard !sessions.isEmpty else { return }
+        if focus == nil { focus = sessions.first?.id }
+        refreshMochi()
+        mode = .compact
     }
 
     private func push(_ s: inout Session) {
