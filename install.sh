@@ -28,12 +28,11 @@ fi
 
 # Une seule fois : proposer le certificat local qui garde les autorisations macOS d'une mise à jour à l'autre.
 if ! security find-certificate -c "Encoche Dev" >/dev/null 2>&1 && [[ ! -e $SRC/.cert-asked ]] && [[ -r /dev/tty ]]; then
-  touch $SRC/.cert-asked
   echo
   echo "→ Sans certificat, macOS redemande les autorisations (Accessibilité…) après chaque mise à jour."
   echo "  Encoche peut créer un certificat local, rien qu'à elle, pour l'éviter (macOS demandera ton mot de passe)."
   printf "  Créer le certificat ? [o/N] "
-  read -r answer < /dev/tty || answer=""
+  if read -r answer < /dev/tty; then touch $SRC/.cert-asked; else answer=""; fi  # pas de réponse possible : on redemandera
   if [[ $answer == [oOyY]* ]]; then
     $SRC/tools/cert.sh || echo "  Certificat non créé : ce n'est pas grave, Encoche marche sans."
   fi

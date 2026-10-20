@@ -42,7 +42,10 @@ final class Updater: ObservableObject {
         problem = nil
         DispatchQueue.global(qos: .utility).async {
             let fetched = Self.git(src, ["fetch", "--quiet", "origin", "main"]) != nil
-            let log = Self.git(src, ["log", "--format=%s", "-n", "20", "HEAD..origin/main"]) ?? ""
+            // Comparé au commit compilé dans l'app (pas au code récupéré) : une compilation ratée reste à refaire.
+            let built = (Bundle.main.object(forInfoDictionaryKey: "EncocheCommit") as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "HEAD"
+            let log = Self.git(src, ["log", "--format=%s", "-n", "20", "\(built)..origin/main"])
+                ?? Self.git(src, ["log", "--format=%s", "-n", "20", "HEAD..origin/main"]) ?? ""
             let head = Self.git(src, ["rev-parse", "origin/main"])?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let titles = log.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
             DispatchQueue.main.async {
@@ -80,13 +83,23 @@ final class Updater: ObservableObject {
                         u.problem = "La mise à jour n'a pas pu récupérer le code (modifs locales dans \(src) ?)."
                         return
                     }
-                    // build.sh quitte Encoche : on le lance détaché, puis on rouvre l'app une fois compilée.
+                    // build.sh quitte Encoche une fois la compilation réussie, puis le script rouvre l'app (il continue
+                    // après la fermeture d'Encoche). S'il se termine alors qu'Encoche tourne encore : la compilation a échoué.
                     let log = NSHomeDirectory() + "/Library/Logs/Encoche-mise-a-jour.log"
-                    let script = "( '\(src)/build.sh' && { open \"$HOME/Applications/Encoche.app\" || { sleep 2; open \"$HOME/Applications/Encoche.app\"; }; } ) > '\(log)' 2>&1 &"
+                    let script = #"exec > "$2" 2>&1; "$1/build.sh" && { open "$HOME/Applications/Encoche.app" || { sleep 2; open "$HOME/Applications/Encoche.app"; }; }"#
                     let p = Process()
                     p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-                    p.arguments = ["-c", script]
-                    try? p.run()
+                    p.arguments = ["-c", script, "encoche-mise-a-jour", src, log]
+                    p.terminationHandler = { _ in
+                        DispatchQueue.main.async {
+                            MainActor.assumeIsolated {
+                                Updater.shared.updating = false
+                                Updater.shared.problem = "La compilation a échoué : rien n'a changé. Détails dans ~/Library/Logs/Encoche-mise-a-jour.log"
+                                Updater.shared.check()
+                            }
+                        }
+                    }
+                    do { try p.run() } catch { u.updating = false; u.problem = "La mise à jour n'a pas pu démarrer." }
                 }
             }
         }
@@ -103,6 +116,7 @@ final class Updater: ObservableObject {
         p.standardOutput = out
         p.standardError = FileHandle.nullDevice
         guard (try? p.run()) != nil else { return nil }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 60) { if p.isRunning { p.terminate() } }  // réseau coupé
         let data = out.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
         return p.terminationStatus == 0 ? String(decoding: data, as: UTF8.self) : nil

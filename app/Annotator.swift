@@ -10,6 +10,7 @@ enum Annotator {
     /// `done` reçoit l'image (annotée ou non) et si on l'envoie à Claude ; nil si on abandonne.
     static func open(_ url: URL, done: @escaping (URL?, Bool) -> Void) {
         guard let image = NSImage(contentsOf: url) else { return done(url, true) }
+        window?.close()  // une seule fenêtre à la fois : l'ancienne capture reste dans le dossier des captures
         let size = image.size, maxW = 980.0, maxH = 640.0
         let k = min(1, maxW / size.width, maxH / size.height)
         let canvas = CGSize(width: (size.width * k).rounded(), height: (size.height * k).rounded())
@@ -17,9 +18,12 @@ enum Annotator {
                          styleMask: [.titled, .closable], backing: .buffered, defer: false)
         w.title = "Annoter la capture"
         w.isReleasedWhenClosed = false
-        w.contentView = NSHostingView(rootView: AnnotatorView(image: image, canvas: canvas) { strokes, send in
-            window?.close()
-            window = nil
+        var finished = false
+        w.contentView = NSHostingView(rootView: AnnotatorView(image: image, canvas: canvas) { [weak w] strokes, send in
+            guard !finished else { return }  // un seul envoi par fenêtre
+            finished = true
+            w?.close()
+            if window === w { window = nil }
             guard let strokes else { return done(nil, false) }
             done(strokes.isEmpty ? url : (render(image, strokes) ?? url), send)
         })

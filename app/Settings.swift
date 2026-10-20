@@ -7,7 +7,19 @@ import SwiftUI
 enum SettingsWindow {
     private static var window: NSWindow?
 
-    enum Tab: String, CaseIterable { case general = "Général", mochi = "Bonhomme", keys = "Raccourcis", care = "Rappels", friends = "Potes", update = "Mise à jour" }
+    enum Tab: String, CaseIterable {
+        case general = "Général", mochi = "Bonhomme", keys = "Raccourcis", care = "Rappels", friends = "Potes", update = "Mise à jour"
+        var icon: String {
+            switch self {
+            case .general: "gearshape.fill"
+            case .mochi: "face.smiling.inverse"
+            case .keys: "command"
+            case .care: "heart.fill"
+            case .friends: "person.2.fill"
+            case .update: "arrow.down.circle.fill"
+            }
+        }
+    }
 
     final class Selection: ObservableObject {
         static let shared = Selection()
@@ -20,6 +32,9 @@ enum SettingsWindow {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 540, height: 600),
                              styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
             w.title = "Réglages d'Encoche"
+            w.titlebarAppearsTransparent = true
+            w.appearance = NSAppearance(named: .darkAqua)
+            w.backgroundColor = NSColor(Color.surface)
             w.isReleasedWhenClosed = false
             w.contentView = NSHostingView(rootView: SettingsView(store: Store.shared))
             w.center()
@@ -27,6 +42,47 @@ enum SettingsWindow {
         }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+    }
+}
+
+/// Barre d'onglets des Réglages, comme celle de l'encoche : grande icône, nom, pastille qui glisse.
+private struct SettingsTabBar: View {
+    @Binding var selection: SettingsWindow.Tab
+    @Namespace private var ns
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(SettingsWindow.Tab.allCases, id: \.self) { t in
+                let on = t == selection
+                Button { withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) { selection = t } } label: {
+                    VStack(spacing: 5) {
+                        Image(systemName: t.icon)
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(on ? Color(hex: "#FF8BC4") : Color.muted)
+                            .frame(height: 22)
+                        Text(t.rawValue)
+                            .font(.system(size: 11, weight: on ? .semibold : .medium))
+                            .foregroundStyle(on ? Color.ink : Color.muted)
+                    }
+                    .frame(width: 80, height: 56)
+                    .background {
+                        if on {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.white.opacity(0.09))
+                                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.08)))
+                                .matchedGeometryEffect(id: "onglet", in: ns)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(t.rawValue)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -76,7 +132,11 @@ private struct SettingsView: View {
     @ObservedObject private var selection = SettingsWindow.Selection.shared
 
     var body: some View {
-        TabView(selection: $selection.tab) {
+        VStack(spacing: 0) {
+            SettingsTabBar(selection: $selection.tab)
+            Divider().opacity(0.5)
+            Group {
+            if selection.tab == .general {
             Form {
             Section("Général") {
                 Toggle("Sons", isOn: Binding(get: { Sound.shared.on }, set: { Sound.shared.on = $0; store.objectWillChange.send() }))
@@ -94,9 +154,10 @@ private struct SettingsView: View {
             }
             }
             .formStyle(.grouped)
-            .tabItem { Label("Général", systemImage: "gearshape") }
-            .tag(SettingsWindow.Tab.general)
+            .scrollContentBackground(.hidden)
+            }  // general
 
+            if selection.tab == .mochi {
             Form {
             Section("Skin du bonhomme") {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
@@ -147,9 +208,10 @@ private struct SettingsView: View {
 
             }
             .formStyle(.grouped)
-            .tabItem { Label("Bonhomme", systemImage: "face.smiling") }
-            .tag(SettingsWindow.Tab.mochi)
+            .scrollContentBackground(.hidden)
+            }  // mochi
 
+            if selection.tab == .keys {
             Form {
             Section("Raccourcis") {
                 Picker("Écrire à Claude", selection: $summon) {
@@ -179,9 +241,10 @@ private struct SettingsView: View {
 
             }
             .formStyle(.grouped)
-            .tabItem { Label("Raccourcis", systemImage: "keyboard") }
-            .tag(SettingsWindow.Tab.keys)
+            .scrollContentBackground(.hidden)
+            }  // keys
 
+            if selection.tab == .care {
             Form {
             Section("Rappels du bonhomme") {
                 Toggle("Rappels activés", isOn: $care)
@@ -198,9 +261,10 @@ private struct SettingsView: View {
 
             }
             .formStyle(.grouped)
-            .tabItem { Label("Rappels", systemImage: "heart") }
-            .tag(SettingsWindow.Tab.care)
+            .scrollContentBackground(.hidden)
+            }  // care
 
+            if selection.tab == .friends {
             Form {
             Section("Notifications sur le téléphone (ntfy)") {
                 Toggle("Prévenir quand Claude a fini ou attend", isOn: $phone)
@@ -244,9 +308,10 @@ private struct SettingsView: View {
 
             }
             .formStyle(.grouped)
-            .tabItem { Label("Potes", systemImage: "person.2") }
-            .tag(SettingsWindow.Tab.friends)
+            .scrollContentBackground(.hidden)
+            }  // friends
 
+            if selection.tab == .update {
             Form {
             Section("Mise à jour") {
                 LabeledContent("Version installée", value: updater.version)
@@ -276,10 +341,15 @@ private struct SettingsView: View {
             }
             }
             .formStyle(.grouped)
-            .tabItem { Label("Mise à jour", systemImage: "arrow.down.circle") }
-            .tag(SettingsWindow.Tab.update)
+            .scrollContentBackground(.hidden)
+            }  // update
+            }
+            .frame(maxHeight: .infinity)
         }
-        .frame(width: 540, height: 600)
+        .background(Color.surface)
+        .tint(Color(hex: "#FF8BC4"))
+        .environment(\.colorScheme, .dark)
+        .frame(width: 540, height: 620)
         .onChange(of: store.favorites) { _, v in UserDefaults.standard.set(v, forKey: "favorites") }
     }
 }

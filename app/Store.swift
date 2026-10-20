@@ -199,6 +199,7 @@ final class Store: ObservableObject {
     /// Onglets du bandeau : Claude, Musique, Étagère, Dev.
     func goTo(_ p: Panel) {
         rememberTab(p)
+        if p == .overview || p == .empty { claudeSeenAt = Date() }
         guard view != p else { return }
         Sound.shared.play("tick")
         if p == .music { Spotify.shared.refresh() }
@@ -235,8 +236,19 @@ final class Store: ObservableObject {
         UserDefaults.standard.set(key, forKey: "lastTab")
     }
 
-    /// À l'ouverture : le dernier onglet choisi, sinon la vue habituelle.
-    var resumeView: Panel { lastTab ?? defaultView }
+    /// À l'ouverture : l'encadré Claude Code s'il y a du nouveau, sinon le dernier onglet choisi.
+    var resumeView: Panel { claudeHasNews ? defaultView : lastTab ?? defaultView }
+
+    /// Dernière fois que tu as regardé l'encadré Claude Code.
+    var claudeSeenAt = Date()
+
+    /// Du nouveau côté Claude : une session t'attend, a un souci, travaille, ou a fini depuis ton dernier regard.
+    var claudeHasNews: Bool {
+        sessions.contains { s in
+            s.state == .waiting || s.state == .approval || s.state == .error
+                || ((s.state == .working || s.state == .finished) && s.updated > claudeSeenAt)
+        }
+    }
 
     func expandDefault() {
         if !permissions.isEmpty { return show(.approval) }
@@ -253,6 +265,7 @@ final class Store: ObservableObject {
     }
 
     func show(_ v: Panel, sound: String? = "open") {
+        if [.overview, .empty, .finished, .error, .approval, .todos].contains(v) { claudeSeenAt = Date() }
         let wasExpanded = mode == .expanded
         guard !(wasExpanded && view == v) else { return }
         withAnimation(Self.openAnimation) {
@@ -265,6 +278,7 @@ final class Store: ObservableObject {
 
     func collapse() {
         let was = mode
+        if mode == .expanded && (view == .overview || view == .empty) { claudeSeenAt = Date() }  // tu viens de le voir
         pinUntil = nil
         if tool == .mirror { tool = .terminal }  // la caméra ne se rallume jamais toute seule à la prochaine ouverture
         toast = nil

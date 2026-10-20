@@ -26,61 +26,18 @@ struct EmptyPanel: View {
     }
 }
 
+/// L'encadré Claude Code. À gauche, ce qui compte maintenant : la session, son état, ce que Claude fait
+/// (ou son plan), le bilan ou l'action d'avant, puis écrire à Claude. À droite, le fond : les autres
+/// sessions, le modèle, les agents et l'usage de l'abonnement.
 struct OverviewPanel: View {
     @ObservedObject var store: Store
+
     var body: some View {
         HStack(spacing: 10) {
-            Card {
-                VStack(alignment: .leading, spacing: 7) {
-                    HStack(spacing: 6) {
-                        Who(session: store.focused, suffix: "")
-                        ModelMenu(store: store)
-                        if let n = store.focused?.agents.count, n > 0 {
-                            Label("\(n)", systemImage: "person.2.wave.2.fill")
-                                .font(Fonts.caption.weight(.semibold)).foregroundStyle(Color(hex: "#7CC7FF"))
-                                .help(store.focused?.agents.values.sorted().joined(separator: ", ") ?? "")
-                                .accessibilityLabel("\(n) sous-agent\(n > 1 ? "s" : "") au travail")
-                        }
-                        Spacer(minLength: 4)
-                        if let s = store.focused {
-                            Button { store.jump(to: s) } label: {
-                                Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .bold))
-                            }
-                            .buttonStyle(IconButton())
-                            .help("Ouvrir dans \(s.place)")
-                            .accessibilityLabel("Ouvrir \(s.name) dans \(s.place)")
-                        }
-                        Button { store.goTo(.projects) } label: {
-                            Image(systemName: "folder").font(.system(size: 10.5, weight: .bold))
-                        }
-                        .buttonStyle(IconButton())
-                        .help("Projets récents : reprendre ou lancer une session")
-                        .accessibilityLabel("Projets récents")
-                    }
-                    if let notice = store.notice {
-                        Text(notice.text)
-                            .font(Fonts.lead)
-                            .foregroundStyle(notice.ok ? Color.success : Color.danger)
-                            .lineLimit(2)
-                            .transition(.opacity)
-                    } else {
-                        VStack(alignment: .leading, spacing: 4) {
-                            // Avec un plan, la ligne du haut devient son avancement (clic : la liste complète).
-                            let plan = store.focused?.plan
-                            if let plan { PlanLine(store: store, done: plan.done, total: plan.total) }
-                            let lines = Array((store.focused?.history ?? []).suffix(plan == nil ? 2 : 1))
-                            ForEach(Array(lines.enumerated()), id: \.offset) { i, line in
-                                let current = i == lines.count - 1
-                                Text(current ? (store.focused?.line ?? line) : line)
-                                    .font(current ? Fonts.lead : Fonts.label)
-                                    .foregroundStyle(current ? Color.ink : Color.faint)
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
-                            }
-                            if lines.isEmpty { Text(store.focused?.line ?? "").foregroundStyle(Color.muted) }
-                        }
-                        .transition(.opacity)
-                    }
+            Card(wash: tint.opacity(0.16)) {
+                VStack(alignment: .leading, spacing: 6) {
+                    header
+                    now
                     Spacer(minLength: 0)
                     FavoritesRow(store: store)
                     ComposeBar(store: store)
@@ -93,10 +50,22 @@ struct OverviewPanel: View {
             .frame(width: 356)
             Card {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(store.sessions.prefix(store.sessions.count > 3 ? 3 : 4)) { s in
-                        SessionRow(session: s, chosen: s.id == store.focused?.id, state: label(s.state)) { store.select(s) }
+                    ForEach(store.sessions.prefix(3)) { s in
+                        SessionRow(session: s, chosen: s.id == store.focused?.id, state: StatePill.label(s.state)) { store.select(s) }
                     }
-                    Spacer(minLength: 0)
+                    if store.sessions.count > 3 {
+                        Text("+\(store.sessions.count - 3) autre\(store.sessions.count > 4 ? "s" : "")").font(Fonts.caption).foregroundStyle(Color.faint)
+                    }
+                    Spacer(minLength: 2)
+                    HStack(spacing: 6) {
+                        ModelMenu(store: store)
+                        if let n = store.focused?.agents.count, n > 0 {
+                            Label("\(n) agent\(n > 1 ? "s" : "")", systemImage: "person.2.wave.2.fill")
+                                .font(Fonts.caption.weight(.semibold)).foregroundStyle(Color(hex: "#7CC7FF"))
+                                .help(store.focused?.agents.values.sorted().joined(separator: ", ") ?? "")
+                        }
+                        Spacer(minLength: 0)
+                    }
                     UsageStrip()
                 }
                 .padding(10)
@@ -105,7 +74,75 @@ struct OverviewPanel: View {
         }
     }
 
-    private func label(_ s: BotState) -> String {
+    private var tint: Color { Color(hex: STYLES[store.focused?.state ?? .idle]?.col ?? "#9A9FA8") }
+
+    /// La session, son état en pastille, et les deux raccourcis (projets, ouvrir).
+    private var header: some View {
+        HStack(spacing: 6) {
+            Who(session: store.focused, suffix: "")
+            if let s = store.focused { StatePill(state: s.state) }
+            Spacer(minLength: 4)
+            Button { store.goTo(.projects) } label: { Image(systemName: "folder").font(.system(size: 10.5, weight: .bold)) }
+                .buttonStyle(IconButton())
+                .help("Projets récents : reprendre ou lancer une session")
+                .accessibilityLabel("Projets récents")
+            if let s = store.focused {
+                Button { store.jump(to: s) } label: { Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .bold)) }
+                    .buttonStyle(IconButton())
+                    .help("Ouvrir dans \(s.place)")
+                    .accessibilityLabel("Ouvrir \(s.name) dans \(s.place)")
+            }
+        }
+    }
+
+    /// Maintenant (en gros), puis le plan ou ce qui s'est passé juste avant (en discret).
+    @ViewBuilder private var now: some View {
+        if let notice = store.notice {
+            Text(notice.text)
+                .font(Fonts.lead)
+                .foregroundStyle(notice.ok ? Color.success : Color.danger)
+                .lineLimit(2)
+                .transition(.opacity)
+        } else if let s = store.focused {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(s.line)
+                    .font(Fonts.title.weight(.semibold))
+                    .foregroundStyle(Color.ink)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                if let plan = s.plan, plan.done < plan.total {
+                    PlanLine(store: store, done: plan.done, total: plan.total)
+                } else if (s.state == .finished || s.state == .idle), let t = s.turn {
+                    Text(t.text + (t.added.map { a in t.removed.map { " · +\(a) −\($0)" } ?? "" } ?? ""))
+                        .font(Fonts.label).foregroundStyle(Color.muted).lineLimit(1)
+                } else if let before = s.history.dropLast().last {
+                    Text(before).font(Fonts.label).foregroundStyle(Color.faint).lineLimit(1).truncationMode(.tail)
+                }
+            }
+            .transition(.opacity)
+        }
+    }
+}
+
+/// L'état d'une session en pastille colorée (« travaille », « attend ta réponse »…), qui pulse quand Claude bosse.
+struct StatePill: View {
+    let state: BotState
+
+    var body: some View {
+        let tint = Color(hex: STYLES[state]?.col ?? "#9A9FA8")
+        HStack(spacing: 4) {
+            if state == .working || state == .approval || state == .waiting { PulseDot(color: tint) }
+            Text(Self.label(state)).lineLimit(1)
+        }
+        .font(Fonts.caption.weight(.medium))
+        .foregroundStyle(tint)
+        .padding(.horizontal, 7)
+        .frame(height: 20)
+        .background(Capsule().fill(tint.opacity(0.14)))
+        .accessibilityLabel(Self.label(state))
+    }
+
+    static func label(_ s: BotState) -> String {
         switch s {
         case .working: "travaille"
         case .approval: "à autoriser"
@@ -243,7 +280,7 @@ struct SessionRow: View {
             }
             .padding(.leading, 10)
             .padding(.trailing, 5)
-            .frame(height: 32)
+            .frame(height: 28)
             .background(RoundedRectangle(cornerRadius: Radius.item, style: .continuous)
                 .fill(.white.opacity(chosen ? 0.12 : hover ? 0.08 : 0.04)))
             .overlay(RoundedRectangle(cornerRadius: Radius.item, style: .continuous).strokeBorder(.white.opacity(chosen ? 0.1 : 0)))
