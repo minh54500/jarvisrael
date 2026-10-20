@@ -22,6 +22,7 @@ struct Session: Identifiable {
     var touched: [String] = []  // fichiers modifiés pendant cette demande
     var turn: Turn?         // bilan de la dernière demande terminée
     var todos: [Todo] = []  // la liste de tâches de Claude (outil TodoWrite)
+    var agents: [String: String] = [:]  // sous-agents au travail (identifiant → type)
 
     var plan: (done: Int, total: Int)? {
         todos.isEmpty ? nil : (todos.filter { $0.status == "completed" }.count, todos.count)
@@ -102,12 +103,27 @@ struct ClaudeModel: Identifiable {
 }
 
 struct Permission: Identifiable {
+    /// Une autorisation d'outil, une question de Claude (choix à cliquer) ou son plan à valider.
+    enum Kind { case tool, question, plan }
+
     let id = UUID()
     let session: String
     let title: String
     let detail: String
     let responder: Responder
     let at = Date()
+    var kind = Kind.tool
+    var input: [String: Any] = [:]
+
+    /// Les questions (AskUserQuestion) : texte, options, choix multiple.
+    var questions: [(question: String, header: String, options: [(label: String, detail: String)], multi: Bool)] {
+        (input["questions"] as? [[String: Any]] ?? []).map { q in
+            (q["question"] as? String ?? "", q["header"] as? String ?? "",
+             (q["options"] as? [[String: Any]] ?? []).map { ($0["label"] as? String ?? "", $0["description"] as? String ?? "") },
+             q["multiSelect"] as? Bool ?? false)
+        }
+    }
+    var plan: String { input["plan"] as? String ?? "" }
 }
 
 /// peek : l'encoche s'élargit un instant pour une bulle (message d'un pote…), sans s'ouvrir.
@@ -152,6 +168,9 @@ final class Store: ObservableObject {
     @Published var notice: (text: String, ok: Bool)?
     /// Rend le clavier à l'app de devant (fourni par AppDelegate, qui tient le panneau).
     var releaseKeyboard: () -> Void = {}
+    /// Encoche visible ou non dans les partages d'écran, enregistrements et captures (fourni par AppDelegate).
+    var applyPrivacy: (Bool) -> Void = { _ in }
+    var hiddenInShares: Bool { UserDefaults.standard.object(forKey: "privacy.hide") as? Bool ?? true }
 
     /// Étagère : fichiers gardés dans l'encoche le temps de les déposer ou coller ailleurs.
     @Published var shelf: [URL] = (UserDefaults.standard.stringArray(forKey: "shelf") ?? [])
@@ -195,14 +214,15 @@ final class Store: ObservableObject {
         case .greeting: 150
         case .overview: 226
         case .empty: 150
-        case .approval: 206
+        case .approval: currentPermission?.kind == .plan ? 262 : currentPermission?.kind == .question ? 232 : 206
         case .finished: focused?.turn == nil ? 176 : (focused?.turn?.files.isEmpty ?? true) ? 196 : 226
         case .error, .choose: 176
-        case .dev: devShowsServers ? 206 : 246
+        case .dev: tool == .servers ? 206 : tool == .mirror ? 230 : 250
         case .care: 164
         case .todos: 216
         case .friends: friendsShowsChat ? 240 : 190
-        case .upload, .shelf, .music: 176
+        case .upload, .shelf: 176
+        case .music: 196
         case .converting, .result: 150
         }
         return base + max(0, notch.height - 32)
@@ -274,6 +294,7 @@ final class Store: ObservableObject {
         // (Un menu ouvert depuis plus de 2 min : sa fermeture s'est perdue, il ne retient plus l'encoche.)
         let menu = menuOpen && Date().timeIntervalSince(menuOpenedAt ?? .distantPast) < 120
         if composing || sending || menu || Voice.shared.listening { return true }
+        if view == .dev && (Prompter.shared.showing || TextAI.shared.busy != nil) { return true }  // lecture, Claude qui réfléchit
         if !permissions.isEmpty && mode == .expanded && view == .approval { return true }
         if view == .choose || view == .converting || fileDragging { return true }
         if let pinUntil, Date() < pinUntil { return true }
@@ -819,6 +840,41 @@ final class Store: ObservableObject {
             if let p = s.plan, p.done == p.total { s.todos = [] }  // plan fini : la nouvelle demande repart à zéro
             s.line = "« \(short(ev["prompt"] as? String ?? "", 70)) »"
             push(&s)
+        case "PreToolUse" where responder != nil:
+            // Une question de Claude ou son plan : la réponse viendra de l'encoche (ou de VS Code, au choix).
+            let tool = ev["tool_name"] as? String ?? ""
+            let input = ev["tool_input"] as? [String: Any] ?? [:]
+            let plan = tool == "ExitPlanMode"
+            var p = Permission(session: sid, title: plan ? "propose un plan" : "te pose une question",
+                               detail: plan ? short(input["plan"] as? String ?? "", 200) : "", responder: responder!)
+            p.kind = plan ? .plan : .question
+            p.input = input
+            permissions.append(p)
+            s.state = plan ? .approval : .waiting
+            s.line = plan ? "Propose un plan" : "Te pose une question"
+            push(&s)
+            if draft.isEmpty && !sending { focus = sid }
+            store(s)
+            alert(.approval, state: s.state)
+            Phone.notify(plan ? "Claude propose un plan" : "Claude te pose une question", s.name, tag: "question")
+            let id = p.id
+            DispatchQueue.main.asyncAfter(deadline: .now() + 117) { self.expire(id) }
+            return
+        case "SubagentStart":
+            let type = ev["agent_type"] as? String ?? "agent"
+            s.agents[ev["agent_id"] as? String ?? UUID().uuidString] = type
+            s.state = .working
+            s.line = "Lance un sous-agent : \(type)"
+            push(&s)
+        case "SubagentStop":
+            s.agents.removeValue(forKey: ev["agent_id"] as? String ?? "")
+        case "PreCompact":
+            s.line = "Fait de la place dans sa mémoire…"
+            push(&s)
+            mochi.emote(.yawn, 1.6)
+        case "PostCompact":
+            s.line = "Mémoire compressée ✓"
+            push(&s)
         case "PreToolUse":
             if s.state != .approval { s.state = .working }
             if ev["tool_name"] as? String == "TodoWrite", let list = (ev["tool_input"] as? [String: Any])?["todos"] as? [[String: Any]] {
@@ -863,6 +919,7 @@ final class Store: ObservableObject {
         case "Stop":
             s.state = .finished
             s.line = "Terminé"
+            s.agents = [:]
             if let start = s.turnStart {
                 let turn = Turn(files: s.touched, seconds: Date().timeIntervalSince(start))
                 s.turn = turn
@@ -987,6 +1044,7 @@ final class Store: ObservableObject {
     /// Ce que l'app voit, pour le diagnostic (événement « EncocheDebug » sur le socket).
     private var debugState: [String: Any] {
         ["mode": "\(mode)", "view": "\(view)", "hooked": hooked, "permissions": permissions.count, "ended": Array(ended),
+         "usage": [Usage.shared.fiveHour?.used ?? -1, Usage.shared.week?.used ?? -1],
          "sessions": sessions.map { ["id": $0.id, "name": $0.name, "state": $0.state.rawValue, "entrypoint": $0.entrypoint,
                                     "line": $0.line, "updated": $0.updated.timeIntervalSince1970] }]
     }
@@ -1083,9 +1141,55 @@ final class Store: ObservableObject {
     /// Réponse depuis l'encoche : "allow", "always" ou "deny".
     /// ⌥⇧Y / ⌥⇧N : on ne répond qu'à une demande affichée ; sinon le premier appui la montre.
     func answerFromKeyboard(_ decision: String) {
-        guard !permissions.isEmpty else { return }
+        guard let p = permissions.first else { return }
         guard mode == .expanded && view == .approval else { return show(.approval) }
-        answer(decision)
+        switch p.kind {
+        case .tool: answer(decision)
+        case .plan: decision == "allow" ? approvePlan() : revisePlan(nil)
+        case .question: break  // il faut choisir une réponse
+        }
+    }
+
+    /// Réponses aux questions de Claude : { texte de la question : choix (plusieurs : séparés par des virgules) }.
+    func answerQuestion(_ answers: [String: String]) {
+        guard let p = permissions.first, p.kind == .question else { return }
+        var input = p.input
+        input["answers"] = answers
+        finish(p, ["permissionDecision": "allow", "updatedInput": input], working: true)
+    }
+
+    func approvePlan() {
+        guard let p = permissions.first, p.kind == .plan else { return }
+        finish(p, ["permissionDecision": "allow", "updatedInput": p.input], working: true)
+    }
+
+    /// « Modifier » (avec ce qu'il faut changer) ou « Refuser » (sans) : Claude reste en mode plan.
+    func revisePlan(_ feedback: String?) {
+        guard let p = permissions.first, p.kind == .plan else { return }
+        let f = feedback?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        finish(p, ["permissionDecision": "deny",
+                   "message": f.isEmpty ? "Plan refusé depuis l'encoche." : "Je veux des changements au plan : \(f)"], working: !f.isEmpty)
+    }
+
+    /// « Répondre dans VS Code » : l'encoche s'efface, Claude Code pose la question lui-même.
+    func answerElsewhere() {
+        guard let p = permissions.first else { return }
+        p.responder.close()
+        permissions.removeFirst()
+        if let s = session(p.session) { jump(to: s) } else { collapseSoon() }
+    }
+
+    private func finish(_ p: Permission, _ reply: [String: Any], working: Bool) {
+        p.responder.reply(reply)
+        permissions.removeAll { $0.id == p.id }
+        if var s = sessions.first(where: { $0.id == p.session }) {
+            s.state = working ? .working : .idle
+            store(s)
+        }
+        Sound.shared.play("approve")
+        mochi.emote(.happy, 0.9)
+        refreshMochi()
+        collapseSoon()
     }
 
     func answer(_ decision: String) {
@@ -1181,7 +1285,18 @@ final class Store: ObservableObject {
     }
 
     /// Onglet Dev : le mini-terminal, ou les serveurs et la santé du Mac.
-    @Published var devShowsServers = false
+    /// Onglet Outils : Terminal, Serveurs · Mac, Texte IA, Miroir, Prompteur.
+    enum Tool: String, CaseIterable { case terminal = "Terminal", servers = "Serveurs", text = "Texte IA", mirror = "Miroir", prompter = "Prompteur" }
+    @Published var tool = Tool(rawValue: UserDefaults.standard.string(forKey: "tool") ?? "") ?? .terminal {
+        didSet { UserDefaults.standard.set(tool.rawValue, forKey: "tool") }
+    }
+
+    /// Ouvre l'onglet Outils sur cette section (raccourci ⌥⇧R, étagère…).
+    func openTool(_ t: Tool) {
+        tool = t
+        show(.dev, sound: nil)
+        pinUntil = Date().addingTimeInterval(1.5)
+    }
 
     /// Une commande du mini-terminal est finie : si elle a duré et qu'on regardait ailleurs, le bonhomme le dit.
     func shellFinished(ok: Bool, seconds: Double) {
@@ -1189,7 +1304,7 @@ final class Store: ObservableObject {
         Sound.shared.play(ok ? "finish" : "error")
         mochi.emote(ok ? .happy : .worried, 1.8)
         guard !busy else { return }
-        devShowsServers = false
+        tool = .terminal
         show(.dev, sound: nil)
         pinUntil = Date().addingTimeInterval(4)
         DispatchQueue.main.asyncAfter(deadline: .now() + 4.2) {
@@ -1384,7 +1499,10 @@ final class Store: ObservableObject {
     func refreshHooked() {
         loadDefaultModel()
         DispatchQueue.global().async {
-            let on = Bridge.runHookTool("--status").output == "branché"
+            var status = Bridge.runHookTool("--status").output
+            // Branchée par une version précédente : on ajoute les nouveaux événements (déjà accepté).
+            if status == "incomplet", Bridge.runHookTool("--install").ok { status = "branché" }
+            let on = status == "branché"
             DispatchQueue.main.async { self.hooked = on }
         }
     }

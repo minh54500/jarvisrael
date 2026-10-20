@@ -118,7 +118,7 @@ private struct SettingsView: View {
                     ForEach(HotKey.Summon.allCases) { Text($0.label).tag($0) }
                 }
                 .onChange(of: summon) { _, v in HotKey.Summon.current = v }
-                Text("Avec ⇧ en plus : dicter. Pendant une demande d'autorisation : ⌥⇧Y autoriser, ⌥⇧N refuser.")
+                Text("Avec ⇧ en plus : dicter. ⌥⇧R : l'IA sur le texte sélectionné. Pendant une demande d'autorisation : ⌥⇧Y autoriser, ⌥⇧N refuser.")
                     .font(.caption).foregroundStyle(.secondary)
                 if summon == .option {
                     Text("⌥ Espace remplace l'espace insécable du clavier français.").font(.caption).foregroundStyle(.secondary)
@@ -195,6 +195,9 @@ private struct SettingsView: View {
             Section("Général") {
                 Toggle("Sons", isOn: Binding(get: { Sound.shared.on }, set: { Sound.shared.on = $0; store.objectWillChange.send() }))
                 Toggle("Ouvrir au démarrage du Mac", isOn: Binding(get: { store.openAtLogin }, set: { store.setLoginItem($0) }))
+                Toggle("Cacher l'encoche dans les partages d'écran et les captures", isOn: Binding(
+                    get: { store.hiddenInShares },
+                    set: { UserDefaults.standard.set($0, forKey: "privacy.hide"); store.applyPrivacy($0); store.objectWillChange.send() }))
                 HStack {
                     Text(store.hooked ? "Branchée à Claude Code" : "Pas branchée à Claude Code")
                     Spacer()

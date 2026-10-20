@@ -22,10 +22,14 @@ import time
 SOCKET = os.path.expanduser("~/Library/Application Support/Encoche/encoche.sock")
 SETTINGS = os.path.expanduser("~/.claude/settings.json")
 EVENTS = {  # événement -> délai max accordé par Claude Code (s)
-    "SessionStart": 10, "UserPromptSubmit": 10, "PreToolUse": 10, "PostToolUse": 10,
+    # PreToolUse : 120 s, car les questions de Claude et ses plans attendent la réponse donnée dans l'encoche.
+    "SessionStart": 10, "UserPromptSubmit": 10, "PreToolUse": 120, "PostToolUse": 10,
     "PostToolUseFailure": 10, "PermissionRequest": 120, "Notification": 10,
     "Stop": 10, "StopFailure": 10, "SessionEnd": 10,
+    "SubagentStart": 10, "SubagentStop": 10, "PreCompact": 10, "PostCompact": 10,
 }
+# Outils dont la réponse peut venir de l'encoche (PreToolUse bloquant) : questions et plan de Claude.
+INTERACTIVE = ("AskUserQuestion", "ExitPlanMode")
 
 
 def command():
@@ -75,10 +79,20 @@ def installed(data):
     return any(is_ours(h) for groups in data.get("hooks", {}).values() for g in groups for h in g.get("hooks", []))
 
 
+def complete(data):
+    """Tous nos événements sont branchés, avec le bon délai (une nouvelle version peut en ajouter)."""
+    hooks = data.get("hooks", {})
+    for event, timeout in EVENTS.items():
+        ours = [h for g in hooks.get(event, []) for h in g.get("hooks", []) if is_ours(h)]
+        if not ours or ours[0].get("timeout") != timeout:
+            return False
+    return True
+
+
 def manage(flag):
     data = load_settings()
     if flag == "--status":
-        print("branché" if installed(data) else "débranché")
+        print(("branché" if complete(data) else "incomplet") if installed(data) else "débranché")
         return
     data = uninstall(data)
     if flag == "--install":
@@ -126,6 +140,8 @@ def relay():
     except Exception:
         return
     env = os.environ
+    if env.get("ENCOCHE_INTERNAL"):  # les petites requêtes d'Encoche elle-même (jauge, IA sur le texte)
+        return
     payload.setdefault("term_program", env.get("TERM_PROGRAM", ""))
     payload.setdefault("bundle_id", env.get("__CFBundleIdentifier", ""))
     payload.setdefault("entrypoint", env.get("CLAUDE_CODE_ENTRYPOINT", ""))  # "claude-vscode" = extension VS Code
@@ -133,6 +149,25 @@ def relay():
     if env.get("TERM_PROGRAM") == "Apple_Terminal":
         payload.setdefault("tty", parent_tty())
     event = payload.get("hook_event_name", "")
+    interactive = event == "PreToolUse" and payload.get("tool_name") in INTERACTIVE
+
+    if interactive:
+        # Question ou plan : on attend la réponse donnée dans l'encoche. Sans réponse (« répondre dans VS Code »,
+        # app absente, délai), on ne dit rien et Claude Code pose la question lui-même.
+        try:
+            answer = send(payload, 118) or {}
+        except Exception:
+            return
+        decision = answer.get("permissionDecision")
+        out = {"hookEventName": "PreToolUse"}
+        if decision == "allow" and isinstance(answer.get("updatedInput"), dict):
+            out.update({"permissionDecision": "allow", "updatedInput": answer["updatedInput"]})
+        elif decision == "deny":
+            out.update({"permissionDecision": "deny", "permissionDecisionReason": answer.get("message") or "Refusé depuis l'encoche"})
+        else:
+            return
+        print(json.dumps({"hookSpecificOutput": out}))
+        return
 
     if event != "PermissionRequest":
         try:
@@ -151,7 +186,7 @@ def relay():
     elif decision == "always":
         out = {"behavior": "allow", "updatedPermissions": payload.get("permission_suggestions", [])}
     elif decision == "deny":
-        out = {"behavior": "deny", "message": "Refusé depuis l'encoche"}
+        out = {"behavior": "deny", "message": answer.get("message") or "Refusé depuis l'encoche"}
     else:
         return
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": out}}))

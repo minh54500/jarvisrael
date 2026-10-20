@@ -452,7 +452,7 @@ private struct Tabs: View {
             }
             item(.shelf, icon: store.shelf.isEmpty ? "tray" : "tray.full.fill", title: "Étagère",
                  badge: store.shelf.isEmpty ? nil : "\(store.shelf.count)", live: false) { store.goTo(.shelf) }
-            item(.dev, icon: "terminal", title: "Dev", badge: nil, live: false) { store.goTo(.dev) }
+            item(.dev, icon: "square.grid.2x2.fill", title: "Outils", badge: nil, live: Prompter.shared.showing) { store.goTo(.dev) }
             // Messages non lus d'abord (bulle), sinon le nombre de potes sur leur Mac.
             let online = friends.list.filter { $0.online && $0.presence == .active }.count
             item(.friends, icon: friends.unread > 0 ? "bubble.left.and.bubble.right.fill" : "person.2.fill", title: "Potes",
@@ -651,6 +651,12 @@ private struct OverviewPanel: View {
                     HStack(spacing: 6) {
                         Who(session: store.focused, suffix: "")
                         ModelMenu(store: store)
+                        if let n = store.focused?.agents.count, n > 0 {
+                            Label("\(n)", systemImage: "person.2.wave.2.fill")
+                                .font(Fonts.caption.weight(.semibold)).foregroundStyle(Color(hex: "#7CC7FF"))
+                                .help(store.focused?.agents.values.sorted().joined(separator: ", ") ?? "")
+                                .accessibilityLabel("\(n) sous-agent\(n > 1 ? "s" : "") au travail")
+                        }
                         Spacer(minLength: 4)
                         if let s = store.focused {
                             Button { store.jump(to: s) } label: {
@@ -697,12 +703,14 @@ private struct OverviewPanel: View {
             .frame(width: 356)
             Card {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(store.sessions.prefix(4)) { s in
+                    ForEach(store.sessions.prefix(store.sessions.count > 3 ? 3 : 4)) { s in
                         SessionRow(session: s, chosen: s.id == store.focused?.id, state: label(s.state)) { store.select(s) }
                     }
+                    Spacer(minLength: 0)
+                    UsageStrip()
                 }
                 .padding(10)
-                .frame(maxHeight: .infinity, alignment: .center)
+                .frame(maxHeight: .infinity, alignment: .top)
             }
         }
     }
@@ -777,6 +785,43 @@ private struct ModelMenu: View {
     private func isDefault(_ m: ClaudeModel) -> Bool {
         let d = store.defaultModel.lowercased()
         return !d.isEmpty && (m.arg == d || m.arg.contains("-\(d)-"))
+    }
+}
+
+/// « Session 5 h ▰▰▱ 18 % · ↻ 16:40 » et « Semaine 6 % » : l'usage de l'abonnement Claude.
+private struct UsageStrip: View {
+    @ObservedObject var usage = Usage.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let f = usage.fiveHour { row("Session 5 h", f) }
+            if let w = usage.week { row("Semaine", w) }
+            if usage.fiveHour == nil && usage.week == nil {
+                Text("Usage Claude : je regarde…").font(Fonts.caption).foregroundStyle(Color.faint)
+            }
+        }
+        .onAppear { usage.refreshIfStale() }
+        .help(usage.updated.map { "Mis à jour à \($0.formatted(date: .omitted, time: .shortened))" } ?? "")
+    }
+
+    private func row(_ label: String, _ w: Usage.Window) -> some View {
+        let tint: Color = w.used >= 0.8 ? .danger : w.used >= 0.5 ? .warning : .success
+        let reset = Calendar.current.isDateInToday(w.resets) ? w.resets.formatted(date: .omitted, time: .shortened)
+            : w.resets.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+        return HStack(spacing: 6) {
+            Text(label).foregroundStyle(Color.muted).frame(width: 66, alignment: .leading)
+            GeometryReader { g in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.white.opacity(0.08))
+                    Capsule().fill(tint).frame(width: max(3, g.size.width * min(1, w.used)))
+                }
+            }
+            .frame(height: 4)
+            Text("\(Int((w.used * 100).rounded())) %").monospacedDigit().foregroundStyle(Color.soft).frame(width: 34, alignment: .trailing)
+        }
+        .font(Fonts.caption)
+        .help("Repart à zéro : \(reset)")
+        .accessibilityLabel("\(label) : \(Int(w.used * 100)) pour cent utilisés, repart à zéro \(reset)")
     }
 }
 
@@ -971,6 +1016,12 @@ private struct ShelfPanel: View {
                             .font(Fonts.label).foregroundStyle(Color.muted).lineLimit(1)
                     }
                     Spacer()
+                    if !clips && !store.shelf.isEmpty {
+                        Button { airDrop(store.shelf) } label: { Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: 11.5, weight: .semibold)) }
+                            .buttonStyle(IconButton())
+                            .help("Envoyer les fichiers de l'étagère par AirDrop")
+                            .accessibilityLabel("AirDrop")
+                    }
                     if !clips {
                         Button { store.capture() } label: { Image(systemName: "viewfinder").font(.system(size: 11.5, weight: .semibold)) }
                             .buttonStyle(IconButton())
@@ -1003,6 +1054,13 @@ private struct ShelfPanel: View {
             .padding(.vertical, 12)
         }
     }
+}
+
+/// AirDrop : la fenêtre de macOS pour choisir l'appareil.
+@MainActor func airDrop(_ urls: [URL]) {
+    guard !urls.isEmpty, let service = NSSharingService(named: .sendViaAirDrop) else { return }
+    NSApp.activate(ignoringOtherApps: true)
+    service.perform(withItems: urls)
 }
 
 /// Deux choix côte à côte, la pastille claire sur celui qui est actif.
@@ -1127,6 +1185,8 @@ private struct ShelfItem: View {
         }
         .contextMenu {
             Button("Copier") { store.copyFile(url) }
+            Button("Envoyer par AirDrop") { airDrop([url]) }
+            if TextAI.canSummarize(url) { Button("Résumer avec l'IA") { TextAI.shared.summarize(url) } }
             Button("Afficher dans le Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
             Divider()
             Button("Retirer de l'étagère") { store.unshelve(url) }
@@ -1157,17 +1217,23 @@ private struct MusicPanel: View {
                 .buttonStyle(.plain)
                 .help("Ouvrir Spotify")
             VStack(alignment: .leading, spacing: 3) {
-                Text(t.name).font(.system(size: 14.5, weight: .semibold)).lineLimit(1)
+                HStack(spacing: 7) {
+                    Text(t.name).font(.system(size: 14.5, weight: .semibold)).lineLimit(1)
+                    if spotify.playing { Visualizer().frame(width: 16, height: 12) }
+                }
                 if spotify.denied {
                     sub("Autorise Encoche à piloter Spotify : Réglages Système → Confidentialité → Automatisation.", red: true)
                         .font(Fonts.caption)
                 } else {
                     Text(t.artist).foregroundStyle(Color.muted).lineLimit(1)
                 }
-                Spacer(minLength: 4)
+                LyricLine(spotify: spotify)
+                Spacer(minLength: 2)
                 MusicProgress(spotify: spotify)
             }
-            .frame(height: 76)
+            .frame(height: 96)
+            .onAppear { Lyrics.shared.load(t) }
+            .onChange(of: t.id) { _, _ in Lyrics.shared.load(t) }
             HStack(spacing: 2) {
                 Button { spotify.previous() } label: { Image(systemName: "backward.fill") }
                     .buttonStyle(RoundControl()).help("Morceau précédent").accessibilityLabel("Morceau précédent")
@@ -1210,6 +1276,41 @@ private struct MusicPanel: View {
                 Button("Lecture") { spotify.playPause() }.buttonStyle(Pill(primary: true))
             } else {
                 Button("Ouvrir Spotify") { spotify.open() }.buttonStyle(Pill(primary: true))
+            }
+        }
+    }
+}
+
+/// Petites barres qui dansent pendant la lecture (décoratives : macOS ne donne pas le son des autres apps).
+private struct Visualizer: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 20)) { tl in
+            let t = tl.date.timeIntervalSinceReferenceDate
+            HStack(alignment: .bottom, spacing: 2) {
+                ForEach(0..<4, id: \.self) { i in
+                    let h = 0.35 + 0.65 * abs(sin(t * (3.1 + Double(i) * 1.3) + Double(i) * 1.7))
+                    Capsule().fill(Color.spotify).frame(width: 2.5, height: 12 * h)
+                }
+            }
+            .frame(maxHeight: .infinity, alignment: .bottom)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// La ligne de paroles en cours (LRCLIB), et la suivante en plus discret.
+private struct LyricLine: View {
+    @ObservedObject var spotify: Spotify
+    @ObservedObject var lyrics = Lyrics.shared
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.25)) { tl in
+            if lyrics.loadedFor == spotify.track?.id, let l = lyrics.at(spotify.position(at: tl.date)) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(l.current.isEmpty ? "♪" : l.current).font(Fonts.label.weight(.medium)).foregroundStyle(Color.soft).lineLimit(1)
+                    if !l.next.isEmpty { Text(l.next).font(Fonts.caption).foregroundStyle(Color.faint).lineLimit(1) }
+                }
+                .animation(.easeOut(duration: 0.2), value: l.current)
             }
         }
     }
@@ -1282,17 +1383,42 @@ private struct DevPanel: View {
     @ObservedObject var store: Store
 
     var body: some View {
-        if store.devShowsServers { ServersPanel(store: store) } else { TerminalPanel(store: store) }
+        switch store.tool {
+        case .terminal: TerminalPanel(store: store)
+        case .servers: ServersPanel(store: store)
+        case .text: TextAIPanel(store: store)
+        case .mirror: MirrorPanel(store: store)
+        case .prompter: PrompterPanel(store: store)
+        }
     }
 }
 
 private struct DevSwitch: View {
     @ObservedObject var store: Store
     var body: some View {
-        Segments(left: "Terminal", right: "Serveurs · Mac", rightOn: store.devShowsServers) { on in
-            Sound.shared.play("tick")
-            withAnimation(Store.openAnimation) { store.devShowsServers = on }
+        HStack(spacing: 2) {
+            ForEach(Store.Tool.allCases, id: \.self) { t in
+                let on = t == store.tool
+                Button {
+                    guard !on else { return }
+                    Sound.shared.play("tick")
+                    withAnimation(Store.openAnimation) { store.tool = t }
+                } label: {
+                    Text(t.rawValue)
+                        .font(Fonts.caption.weight(.semibold))
+                        .foregroundStyle(on ? Color.ink : Color.muted)
+                        .padding(.horizontal, 8)
+                        .frame(height: 22)
+                        .background(Capsule().fill(.white.opacity(on ? 0.14 : 0)))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
         }
+        .padding(2)
+        .background(Capsule().fill(.white.opacity(0.05)))
+        .fixedSize()
     }
 }
 
@@ -1382,7 +1508,7 @@ private struct TerminalPanel: View {
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: "folder.fill").font(.system(size: 10))
-                Text(shell.folderName).lineLimit(1)
+                Text(shell.folderName).lineLimit(1).truncationMode(.middle).frame(maxWidth: 90)
                 Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
             }
             .font(Fonts.caption.weight(.medium))
@@ -1400,52 +1526,219 @@ private struct TerminalPanel: View {
     }
 }
 
-private struct ServersPanel: View {
+/// Texte IA : le texte sélectionné (⌥⇧R) ou un fichier de l'étagère, une action, le résultat à remplacer ou copier.
+private struct TextAIPanel: View {
     @ObservedObject var store: Store
-    @ObservedObject var dev = DevMonitor.shared
+    @ObservedObject var ai = TextAI.shared
 
     var body: some View {
-        HStack(spacing: 10) {
-            Card {
-                VStack(alignment: .leading, spacing: 6) {
+        Card(wash: Color(hex: "#A78BFA", 0.18)) {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack {
                     DevSwitch(store: store)
-                    if dev.servers.isEmpty {
-                        Spacer(minLength: 0)
-                        Text(dev.scanned ? "Aucun serveur ne tourne." : "Je regarde…").font(Fonts.lead)
-                        Text("Lance npm run dev (ou autre) : il apparaîtra ici.").font(Fonts.label).foregroundStyle(Color.muted)
-                        Spacer(minLength: 0)
-                    } else {
-                        ScrollView(.vertical, showsIndicators: false) {
-                            VStack(spacing: 4) {
-                                ForEach(dev.servers) { s in ServerRow(server: s) }
+                    Spacer(minLength: 4)
+                    if !ai.origin.isEmpty { Text(ai.origin).font(Fonts.caption).foregroundStyle(Color.faint).lineLimit(1) }
+                }
+                if ai.source.isEmpty {
+                    Spacer(minLength: 0)
+                    Text(ai.error ?? "Sélectionne un texte dans n'importe quelle app, puis ⌥⇧R.").font(Fonts.lead)
+                    Text("Corriger, reformuler, raccourcir, traduire… Le résultat remplace ta sélection. "
+                         + "Dans l'étagère : clic droit sur un PDF → Résumer avec l'IA.").font(Fonts.label).foregroundStyle(Color.muted)
+                    Spacer(minLength: 0)
+                } else {
+                    Text(ai.source)
+                        .font(Fonts.caption).foregroundStyle(Color.muted).lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 5) {
+                            ForEach(TextAI.Action.allCases) { a in
+                                Button { ai.run(a) } label: {
+                                    HStack(spacing: 4) {
+                                        if ai.busy == a { ProgressView().controlSize(.mini) }
+                                        Text(a.rawValue)
+                                    }
+                                }
+                                .buttonStyle(Chip())
+                                .disabled(ai.busy != nil)
                             }
                         }
                     }
-                }
-                .padding(.leading, 100)
-                .padding(.trailing, 10)
-                .padding(.vertical, 11)
-            }
-            .frame(width: 400)
-            Card {
-                VStack(alignment: .leading, spacing: 7) {
-                    Gauge(label: "CPU", value: dev.health.cpu)
-                    Gauge(label: "Mémoire", value: dev.health.memory)
-                    if let b = dev.health.battery {
-                        Gauge(label: dev.health.charging ? "Batterie ⚡︎" : "Batterie", value: Double(b) / 100, invert: true)
+                    ScrollView(.vertical) {
+                        Text(ai.busy != nil ? "Claude écrit…" : ai.error ?? (ai.result.isEmpty ? "Choisis une action." : ai.result))
+                            .font(Fonts.label)
+                            .foregroundStyle(ai.result.isEmpty || ai.busy != nil ? Color.faint : ai.error != nil ? Color.danger : Color.ink)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
                     }
-                    HStack {
-                        Text("Chaleur").foregroundStyle(Color.muted)
+                    .background(RoundedRectangle(cornerRadius: Radius.item, style: .continuous).fill(Color.sunken))
+                    HStack(spacing: 8) {
+                        if ai.canReplace { Button("Remplacer la sélection") { ai.replace() }.buttonStyle(Pill(primary: true)) }
+                        Button("Copier") { ai.copy() }.buttonStyle(Pill(primary: !ai.canReplace)).disabled(ai.result.isEmpty)
                         Spacer()
-                        Text(thermal.0).foregroundStyle(thermal.1)
+                        Text("⌥⇧R").font(Fonts.caption).foregroundStyle(Color.faint).help("Sur un texte sélectionné, dans n'importe quelle app")
                     }
-                    .font(Fonts.caption)
                 }
-                .padding(12)
-                .frame(maxHeight: .infinity, alignment: .center)
+            }
+            .padding(.leading, 100)
+            .padding(.trailing, 12)
+            .padding(.vertical, 10)
+        }
+    }
+}
+
+/// Miroir : la caméra (en miroir) pour vérifier sa tête avant une visio. Éteinte dès que l'encoche se ferme.
+private struct MirrorPanel: View {
+    @ObservedObject var store: Store
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 8) {
+                DevSwitch(store: store)
+                HStack(alignment: .top, spacing: 14) {
+                    MirrorView()
+                        .frame(width: 256, height: 144)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(.white.opacity(0.08)))
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Prêt pour la visio ?").font(Fonts.lead)
+                        Text("La caméra s'éteint dès que l'encoche se ferme.").font(Fonts.label).foregroundStyle(Color.muted)
+                        Text("Première fois : autorise la caméra pour Encoche.").font(Fonts.caption).foregroundStyle(Color.faint)
+                    }
+                }
+            }
+            .padding(.leading, 100)
+            .padding(.trailing, 12)
+            .padding(.vertical, 10)
+        }
+    }
+}
+
+/// Prompteur : écrire son texte, puis il défile juste sous la caméra (invisible dans les partages d'écran).
+private struct PrompterPanel: View {
+    @ObservedObject var store: Store
+    @ObservedObject var p = Prompter.shared
+
+    var body: some View {
+        Card {
+            if p.showing { reading } else { editing }
+        }
+    }
+
+    private var editing: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            DevSwitch(store: store)
+            ScriptEditor(text: $p.script, onEditing: { store.setComposing($0) })
+                .background(RoundedRectangle(cornerRadius: Radius.item, style: .continuous).fill(Color.sunken))
+                .overlay(RoundedRectangle(cornerRadius: Radius.item, style: .continuous).strokeBorder(.white.opacity(0.06)))
+            HStack(spacing: 8) {
+                Text("Taille").font(Fonts.caption).foregroundStyle(Color.muted)
+                Button { p.size = max(14, p.size - 2) } label: { Image(systemName: "textformat.size.smaller") }.buttonStyle(MiniIcon())
+                Button { p.size = min(40, p.size + 2) } label: { Image(systemName: "textformat.size.larger") }.buttonStyle(MiniIcon())
+                Text("Vitesse").font(Fonts.caption).foregroundStyle(Color.muted).padding(.leading, 6)
+                Button { p.faster(-6) } label: { Image(systemName: "tortoise.fill") }.buttonStyle(MiniIcon()).help("Plus lent")
+                Button { p.faster(6) } label: { Image(systemName: "hare.fill") }.buttonStyle(MiniIcon()).help("Plus rapide")
+                Spacer()
+                Button("Lancer") { p.start() }.buttonStyle(Pill(primary: true))
             }
         }
-        .onAppear { dev.watch(true) }
+        .padding(.leading, 100)
+        .padding(.trailing, 12)
+        .padding(.vertical, 10)
+    }
+
+    /// Le texte monte doucement ; il commence juste sous la caméra, là où tu regardes.
+    private var reading: some View {
+        VStack(spacing: 6) {
+            TimelineView(.animation) { tl in
+                GeometryReader { g in
+                    Text(p.script)
+                        .font(.system(size: p.size, weight: .semibold))
+                        .foregroundStyle(Color.ink)
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(p.size * 0.25)
+                        .frame(width: g.size.width)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .background(GeometryReader { t in Color.clear.preference(key: TextHeight.self, value: t.size.height) })
+                        .offset(y: 10 - p.offset(at: tl.date))
+                }
+            }
+            .onPreferenceChange(TextHeight.self) { p.textHeight = $0 }
+            .clipped()
+            .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.7), .init(color: .clear, location: 1)],
+                                 startPoint: .top, endPoint: .bottom))
+            HStack(spacing: 8) {
+                Button { p.toggle() } label: { Image(systemName: p.playing ? "pause.fill" : "play.fill") }.buttonStyle(RoundControl(primary: true))
+                    .help(p.playing ? "Pause" : "Reprendre")
+                Button { p.restart() } label: { Image(systemName: "backward.end.fill") }.buttonStyle(RoundControl()).help("Depuis le début")
+                Button { p.faster(-6) } label: { Image(systemName: "tortoise.fill") }.buttonStyle(RoundControl()).help("Plus lent")
+                Button { p.faster(6) } label: { Image(systemName: "hare.fill") }.buttonStyle(RoundControl()).help("Plus rapide")
+                Spacer()
+                Button("Terminer") { p.stop() }.buttonStyle(Pill())
+            }
+        }
+        .padding(.leading, 100)
+        .padding(.trailing, 12)
+        .padding(.vertical, 8)
+    }
+}
+
+private struct TextHeight: PreferenceKey {
+    static let defaultValue = 0.0
+    static func reduce(value: inout Double, nextValue: () -> Double) { value = max(value, nextValue()) }
+}
+
+private struct ServersPanel: View {
+    @ObservedObject var store: Store
+    @ObservedObject var dev = DevMonitor.shared
+    @ObservedObject var bt = Devices.shared
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 8) {
+                DevSwitch(store: store)
+                HStack(alignment: .top, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if dev.servers.isEmpty {
+                            Text(dev.scanned ? "Aucun serveur ne tourne." : "Je regarde…").font(Fonts.lead)
+                            Text("Lance npm run dev (ou autre) : il apparaîtra ici.").font(Fonts.label).foregroundStyle(Color.muted)
+                        } else {
+                            ScrollView(.vertical, showsIndicators: false) {
+                                VStack(spacing: 4) { ForEach(dev.servers) { s in ServerRow(server: s) } }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Gauge(label: "CPU", value: dev.health.cpu)
+                        Gauge(label: "Mémoire", value: dev.health.memory)
+                        if let b = dev.health.battery {
+                            Gauge(label: dev.health.charging ? "Batterie ⚡︎" : "Batterie", value: Double(b) / 100, invert: true)
+                        }
+                        HStack {
+                            Text("Chaleur").foregroundStyle(Color.muted)
+                            Spacer()
+                            Text(thermal.0).foregroundStyle(thermal.1)
+                        }
+                        .font(Fonts.caption)
+                        ForEach(bt.devices.filter(\.hasBattery)) { d in
+                            HStack(spacing: 4) {
+                                Image(systemName: d.name.lowercased().contains("airpods") ? "airpods" : "headphones")
+                                Text(d.summary).lineLimit(1)
+                            }
+                            .font(Fonts.caption)
+                            .foregroundStyle(Color.soft)
+                            .help(d.name)
+                        }
+                    }
+                    .frame(width: 160)
+                }
+            }
+            .padding(.leading, 100)
+            .padding(.trailing, 12)
+            .padding(.vertical, 11)
+        }
+        .onAppear { dev.watch(true); bt.refresh() }
         .onDisappear { dev.watch(false) }
     }
 
@@ -1532,7 +1825,7 @@ private struct CarePanel: View {
                         Button("C'est fait") { store.answerReminder(later: false) }.buttonStyle(Pill(primary: true))
                         Button("Dans 10 min") { store.answerReminder(later: true) }.buttonStyle(Pill())
                     case .heat:
-                        Button("Voir l'onglet Dev") { store.goTo(.dev) }.buttonStyle(Pill(primary: true))
+                        Button("Voir les Outils") { store.openTool(.servers) }.buttonStyle(Pill(primary: true))
                         Button("OK") { store.answerReminder(later: false) }.buttonStyle(Pill())
                     default:
                         Button(r == .water ? "C'est fait" : "OK") { store.answerReminder(later: false) }.buttonStyle(Pill(primary: true))
@@ -1934,11 +2227,153 @@ private struct FriendTile: View {
     }
 }
 
+/// Une question de Claude : un clic sur une réponse (ou « Autre » pour écrire la sienne). Plusieurs
+/// questions : l'une après l'autre ; choix multiple : on coche, puis Valider.
+private struct QuestionView: View {
+    @ObservedObject var store: Store
+    let permission: Permission
+    @State private var index = 0
+    @State private var answers: [String: String] = [:]
+    @State private var picked = Set<String>()
+    @State private var other = ""
+    @State private var writing = false
+    @State private var focusOther = false
+
+    var body: some View {
+        let qs = permission.questions
+        let q = qs.indices.contains(index) ? qs[index] : nil
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Who(session: store.session(permission.session), suffix: "Claude te pose une question")
+                Spacer()
+                if qs.count > 1 { Text("\(index + 1)/\(qs.count)").font(Fonts.caption).monospacedDigit().foregroundStyle(Color.muted) }
+            }
+            if let q {
+                Text(q.question).font(Fonts.lead).lineLimit(2)
+                if writing {
+                    HStack(spacing: 6) {
+                        ComposeField(text: $other, placeholder: "Ta réponse…", onSubmit: { pick(other) },
+                                     onEditing: { store.setComposing($0) }, focus: focusOther, onFocused: { focusOther = false })
+                            .frame(height: 18)
+                        Button("Envoyer") { pick(other) }.buttonStyle(Pill(primary: true))
+                            .disabled(other.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                    .padding(.leading, 10).padding(.trailing, 4).padding(.vertical, 3)
+                    .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(.white.opacity(0.09)))
+                } else {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(q.options, id: \.label) { o in
+                                let on = picked.contains(o.label)
+                                Button { q.multi ? toggle(o.label) : pick(o.label) } label: {
+                                    HStack(spacing: 4) {
+                                        if q.multi { Image(systemName: on ? "checkmark.square.fill" : "square").font(.system(size: 10.5)) }
+                                        Text(o.label)
+                                    }
+                                }
+                                .buttonStyle(Pill(primary: on))
+                                .help(o.detail)
+                            }
+                            Button("Autre…") { writing = true; focusOther = true }.buttonStyle(Pill())
+                        }
+                    }
+                }
+            }
+            HStack(spacing: 10) {
+                if q?.multi == true && !writing {
+                    Button("Valider") { pick(picked.sorted().joined(separator: ", ")) }.buttonStyle(Pill(primary: true)).disabled(picked.isEmpty)
+                }
+                Button("Répondre dans \(store.session(permission.session)?.place ?? "VS Code")") { store.answerElsewhere() }
+                    .buttonStyle(.plain).font(Fonts.caption).foregroundStyle(Color.faint)
+                Spacer()
+                if let d = q?.options.first(where: { picked.contains($0.label) })?.detail, !d.isEmpty {
+                    Text(d).font(Fonts.caption).foregroundStyle(Color.muted).lineLimit(1)
+                }
+            }
+        }
+        .padding(.leading, 100)
+        .padding(.trailing, 16)
+        .padding(.vertical, 12)
+    }
+
+    private func toggle(_ label: String) {
+        if picked.contains(label) { picked.remove(label) } else { picked.insert(label) }
+        Sound.shared.play("tick")
+    }
+
+    /// Réponse à la question en cours ; à la dernière, tout part à Claude.
+    private func pick(_ answer: String) {
+        let a = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let qs = permission.questions
+        guard !a.isEmpty, qs.indices.contains(index) else { return }
+        answers[qs[index].question] = a
+        if index + 1 < qs.count {
+            index += 1
+            picked = []
+            other = ""
+            writing = false
+            Sound.shared.play("tick")
+        } else {
+            store.answerQuestion(answers)
+        }
+    }
+}
+
+/// Le plan de Claude : le lire, puis Valider, demander des changements (écrits) ou Refuser.
+private struct PlanView: View {
+    @ObservedObject var store: Store
+    let permission: Permission
+    @State private var feedback = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Who(session: store.session(permission.session), suffix: "Claude propose un plan")
+            ScrollView(.vertical) {
+                Text((try? AttributedString(markdown: permission.plan,
+                                            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(permission.plan))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Color.soft)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(9)
+            }
+            .background(RoundedRectangle(cornerRadius: Radius.item, style: .continuous).fill(Color.sunken))
+            .overlay(RoundedRectangle(cornerRadius: Radius.item, style: .continuous).strokeBorder(.white.opacity(0.05)))
+            HStack(spacing: 6) {
+                ComposeField(text: $feedback, placeholder: "Ce qu'il faut changer (facultatif)…",
+                             onSubmit: { if !feedback.isEmpty { store.revisePlan(feedback) } }, onEditing: { store.setComposing($0) })
+                    .frame(height: 18)
+                    .padding(.leading, 10).padding(.vertical, 6)
+                    .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(.white.opacity(0.08)))
+                if feedback.trimmingCharacters(in: .whitespaces).isEmpty {
+                    Button("Refuser") { store.revisePlan(nil) }.buttonStyle(Pill())
+                } else {
+                    Button("Modifier") { store.revisePlan(feedback) }.buttonStyle(Pill())
+                }
+                Button("Valider le plan") { store.approvePlan() }.buttonStyle(Pill(primary: true))
+            }
+            HStack {
+                Button("Répondre dans \(store.session(permission.session)?.place ?? "VS Code")") { store.answerElsewhere() }
+                    .buttonStyle(.plain).font(Fonts.caption).foregroundStyle(Color.faint)
+                Spacer()
+                Text("⌥⇧Y valider · ⌥⇧N refuser").font(Fonts.caption).foregroundStyle(Color.faint)
+            }
+        }
+        .padding(.leading, 100)
+        .padding(.trailing, 16)
+        .padding(.vertical, 11)
+    }
+}
+
 private struct ApprovalPanel: View {
     @ObservedObject var store: Store
     var body: some View {
-        Card(wash: Color(hex: "#F5A524", 0.42)) {
-            if let p = store.currentPermission {
+        Card(wash: Color(hex: store.currentPermission?.kind == .tool ? "#F5A524" : "#22D3EE", 0.36)) {
+            if let p = store.currentPermission, p.kind == .question {
+                QuestionView(store: store, permission: p).id(p.id)
+            } else if let p = store.currentPermission, p.kind == .plan {
+                PlanView(store: store, permission: p).id(p.id)
+            } else if let p = store.currentPermission {
                 VStack(alignment: .leading, spacing: 9) {
                     Who(session: store.session(p.session), suffix: "Claude \(p.title)")
                     Text(p.detail)

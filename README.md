@@ -8,11 +8,21 @@ Un petit bonhomme qui vit dans l'encoche de ton Mac et garde un œil sur Claude 
 
 - **Suit tes sessions Claude Code** (VS Code ou terminal) : ce que Claude est en train de faire, quand il a fini, quand il attend.
 - **Autorise ou refuse** les demandes de Claude depuis l'encoche, ou au clavier avec ⌥⇧Y / ⌥⇧N.
+- **Réponds aux questions de Claude** (un clic sur ton choix) et **valide son plan** (ou demande des changements) sans ouvrir VS Code.
+- **Jauge d'usage de ton abonnement Claude** : la session de 5 h et la semaine, et quand ça repart à zéro. Le bonhomme prévient à 80 %.
+- **Sous-agents et mémoire** : combien d'agents travaillent, et quand Claude compresse sa mémoire.
 - **Écris à Claude sans quitter ce que tu fais** : ⌥Espace ouvre l'encoche prête à écrire, ⌥⇧Espace pour dicter.
 - **Prompts favoris** en un clic (« Continue », « Lance les tests »…), **choix du modèle**, et un **bilan de fin** : fichiers modifiés, lignes, tokens.
 - **Étagère** pour garder des fichiers sous la main, **historique du presse-papiers**, **capture d'écran** envoyée à Claude.
-- **Onglet Dev** : tes serveurs locaux (ouvrir, arrêter), CPU, mémoire, batterie.
-- **Spotify** : le morceau en cours, lecture/pause, précédent/suivant.
+- **Onglet Outils** :
+  - **Terminal** : une commande dans le dossier d'un projet, le résultat en direct ;
+  - **Serveurs · Mac** : tes serveurs locaux (ouvrir, arrêter), CPU, mémoire, batterie, AirPods ;
+  - **Texte IA** : sélectionne un texte n'importe où, ⌥⇧R, et Claude le corrige, le reformule, le raccourcit ou le traduit (le résultat remplace ta sélection) ; un PDF de l'étagère se résume d'un clic droit ;
+  - **Miroir** : ta caméra pour vérifier ta tête avant une visio ;
+  - **Prompteur** : ton texte défile sous la caméra pour lire en regardant l'objectif.
+- **Spotify** : le morceau en cours, lecture/pause, précédent/suivant, et les **paroles synchronisées** (LRCLIB).
+- **AirPods** : leur batterie (écouteurs et boîtier) dès qu'ils se connectent. **AirDrop** depuis l'étagère.
+- **Discrète en visio** : l'encoche est invisible dans les partages d'écran, enregistrements et captures (réglable).
 - **Rappels** : pause, verre d'eau, « va dormir »… Tout se coupe dans les Réglages.
 - **Entre potes** : partagez un groupe, voyez les bonshommes des autres (et s'ils sont sur leur Mac), discutez dans le chat, envoyez-vous des cœurs.
 - **Le plan de Claude** : sa liste de tâches, cochée au fur et à mesure.

@@ -73,6 +73,11 @@ enum HotKey {
         register(id: 2, key: kVK_Space, modifiers: m | shiftKey) { MainActor.assumeIsolated { Store.shared.summon(dictate: true) } }
     }
 
+    /// ⌥⇧R : l'IA sur le texte sélectionné, dans n'importe quelle app.
+    static func installTextAI() {
+        register(id: 5, key: kVK_ANSI_R, modifiers: optionKey | shiftKey) { MainActor.assumeIsolated { TextAI.shared.grabSelection() } }
+    }
+
     /// ⌥⇧Y autoriser, ⌥⇧N refuser : actifs seulement pendant qu'une demande attend (⌥N tape « ~ »
     /// sur un clavier français, on ne le prend jamais).
     static func approvalKeys(_ on: Bool) {

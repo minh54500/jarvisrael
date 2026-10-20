@@ -92,6 +92,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         place()
         panel.orderFrontRegardless()
         store.releaseKeyboard = { [weak self] in self?.panel.releaseKeyboard() }
+        // Invisible dans les partages d'écran, enregistrements et captures : ton chat, ton presse-papiers
+        // et le prompteur ne se voient pas en visio. Réglable dans Réglages → Général.
+        store.applyPrivacy = { [weak self] hide in self?.panel.sharingType = hide ? .none : .readOnly }
+        store.applyPrivacy(store.hiddenInShares)
 
         bridge = Bridge { event, responder in
             MainActor.assumeIsolated { Store.shared.handle(event, responder) }
@@ -122,6 +126,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = ClipHistory.shared  // l'historique du presse-papiers commence maintenant
         Care.shared.start()
         Friends.shared.restart()
+        Usage.shared.start()
+        Devices.shared.start()
+        HotKey.installTextAI()
 
         // Menu ouvert (modèle, réglages) : l'encoche ne se referme pas sous lui.
         for (name, on) in [(NSMenu.didBeginTrackingNotification, true), (NSMenu.didEndTrackingNotification, false)] {
