@@ -13,10 +13,35 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
 }
 
 /// Panneau collé en haut de l'écran, au-dessus de la barre des menus.
+/// Il ne prend le clavier que pendant qu'on écrit dans l'encoche (les boutons ne le prennent jamais).
 final class NotchPanel: NSPanel {
+    private var wantsKeyboard = false
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
-    override var canBecomeKey: Bool { false }
+    override var canBecomeKey: Bool { wantsKeyboard }
     override var canBecomeMain: Bool { false }
+
+    func takeKeyboard() {
+        wantsKeyboard = true
+        makeKey()
+    }
+
+    /// Rend le clavier à l'app de devant : un panneau qui ne s'active pas le lui rend en se retirant
+    /// un instant de l'écran (le temps d'une seule opération, invisible).
+    func releaseKeyboard() {
+        wantsKeyboard = false
+        guard isKeyWindow else { return }
+        makeFirstResponder(nil)
+        orderOut(nil)
+        orderFrontRegardless()
+    }
+
+    /// Une autre app a pris le clavier.
+    override func resignKey() {
+        super.resignKey()
+        wantsKeyboard = false
+        makeFirstResponder(nil)
+        MainActor.assumeIsolated { Store.shared.keyboardLost() }
+    }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -59,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.contentView = host
         place()
         panel.orderFrontRegardless()
+        store.releaseKeyboard = { [weak self] in self?.panel.releaseKeyboard() }
 
         bridge = Bridge { event, responder in
             MainActor.assumeIsolated { Store.shared.handle(event, responder) }
@@ -123,6 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let pressed = NSEvent.pressedMouseButtons & 1 != 0
         let pb = NSPasteboard(name: .drag)
         if pressed && !wasPressed { dragCount = pb.changeCount }
+        if !pressed && wasPressed { store.mouseReleased() }
         wasPressed = pressed
         let filesDragged = pressed && pb.changeCount != dragCount && (pb.types?.contains(.fileURL) ?? false)
         store.setFileDrag(filesDragged && p.y < 230 && abs(p.x - f.width / 2) < 340)

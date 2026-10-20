@@ -41,4 +41,7 @@ osascript -e 'quit app "Encoche"' 2>/dev/null || true
 mkdir -p ~/Applications
 rm -rf ~/Applications/Encoche.app
 cp -R $APP ~/Applications/
+# Signature ad hoc = nouvelle identité à chaque build : l'ancienne autorisation « Accessibilité »
+# ne vaut plus. On l'efface pour que macOS la redemande proprement au premier envoi.
+tccutil reset Accessibility io.github.minh54500.encoche >/dev/null 2>&1 || true
 echo "✓ Installé : ~/Applications/Encoche.app (v$VERSION)"

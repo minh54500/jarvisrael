@@ -116,6 +116,7 @@ def relay():
     env = os.environ
     payload.setdefault("term_program", env.get("TERM_PROGRAM", ""))
     payload.setdefault("bundle_id", env.get("__CFBundleIdentifier", ""))
+    payload.setdefault("entrypoint", env.get("CLAUDE_CODE_ENTRYPOINT", ""))  # "claude-vscode" = extension VS Code
     payload.setdefault("cwd", os.getcwd())
     event = payload.get("hook_event_name", "")
 

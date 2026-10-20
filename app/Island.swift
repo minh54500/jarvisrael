@@ -228,6 +228,7 @@ struct IslandContent: View {
                 case .choose: ChoosePanel(store: store)
                 case .converting: ConvertingPanel(store: store)
                 case .result: ResultPanel(store: store)
+                case .shelf: ShelfPanel(store: store)
                 }
             }
             .id(store.view)
@@ -252,6 +253,17 @@ struct IslandContent: View {
             Spacer()
             let n = store.sessions.filter { $0.state == .working || $0.state == .approval || $0.state == .waiting }.count
             if n > 0 { Text("\(n) en cours").font(.system(size: 11.5)).foregroundStyle(Color(hex: "#7B8089")) }
+            Button { store.toggleShelf() } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: store.shelf.isEmpty ? "tray" : "tray.full.fill").font(.system(size: 11.5))
+                    if !store.shelf.isEmpty { Text("\(store.shelf.count)").font(.system(size: 11, weight: .semibold)) }
+                }
+                .foregroundStyle(store.view == .shelf ? Color(hex: "#F5F6F8") : Color(hex: "#8E939C"))
+                .frame(minWidth: 24, minHeight: 24)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Étagère : les fichiers gardés dans l'encoche")
             Button {
                 Sound.shared.on.toggle()
                 store.objectWillChange.send()
@@ -355,42 +367,71 @@ private struct OverviewPanel: View {
     var body: some View {
         HStack(spacing: 10) {
             Card {
-                VStack(alignment: .leading, spacing: 8) {
-                    Who(session: store.focused, suffix: "Claude Code")
-                    VStack(alignment: .leading, spacing: 6) {
-                        let lines = Array((store.focused?.history ?? []).suffix(3))
-                        ForEach(Array(lines.enumerated()), id: \.offset) { i, line in
-                            let current = i == lines.count - 1
-                            Text(current ? (store.focused?.line ?? line) : line)
-                                .font(.system(size: current ? 14 : 12.5, weight: current ? .medium : .regular))
-                                .foregroundStyle(current ? Color(hex: "#F5F6F8") : Color(hex: "#5F646D"))
-                                .lineLimit(1)
-                                .truncationMode(.tail)
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(spacing: 6) {
+                        Who(session: store.focused, suffix: "Claude Code")
+                        Spacer(minLength: 4)
+                        if let s = store.focused {
+                            Button { store.jump(to: s) } label: {
+                                Image(systemName: "arrow.up.right").font(.system(size: 9.5, weight: .bold))
+                                    .foregroundStyle(Color(hex: "#A9ADB5"))
+                                    .frame(width: 22, height: 22)
+                                    .background(Circle().fill(.white.opacity(0.07)))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Ouvrir dans VS Code")
                         }
-                        if lines.isEmpty { Text(store.focused?.line ?? "").foregroundStyle(Color(hex: "#9398A1")) }
                     }
+                    if let notice = store.notice {
+                        Text(notice.text)
+                            .font(.system(size: 12.5, weight: .medium))
+                            .foregroundStyle(notice.ok ? Color(hex: "#5EE0AE") : Color(hex: "#FF8D97"))
+                            .lineLimit(2)
+                            .transition(.opacity)
+                    } else {
+                        VStack(alignment: .leading, spacing: 4) {
+                            let lines = Array((store.focused?.history ?? []).suffix(2))
+                            ForEach(Array(lines.enumerated()), id: \.offset) { i, line in
+                                let current = i == lines.count - 1
+                                Text(current ? (store.focused?.line ?? line) : line)
+                                    .font(.system(size: current ? 13.5 : 12, weight: current ? .medium : .regular))
+                                    .foregroundStyle(current ? Color(hex: "#F5F6F8") : Color(hex: "#5F646D"))
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                            }
+                            if lines.isEmpty { Text(store.focused?.line ?? "").foregroundStyle(Color(hex: "#9398A1")) }
+                        }
+                        .transition(.opacity)
+                    }
+                    Spacer(minLength: 0)
+                    ComposeBar(store: store)
                 }
+                .animation(.easeOut(duration: 0.2), value: store.notice?.text)
                 .padding(.leading, 100)
-                .padding(.trailing, 12)
+                .padding(.trailing, 10)
+                .padding(.vertical, 11)
             }
-            .frame(width: 322)
+            .frame(width: 356)
             Card {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(store.sessions.prefix(4)) { s in
-                        Button { store.jump(to: s) } label: {
+                        let chosen = s.id == store.focused?.id
+                        Button { store.select(s) } label: {
                             HStack(spacing: 8) {
                                 Circle().fill(Color(hex: s.color)).frame(width: 8, height: 8)
                                 Text(s.name).fontWeight(.medium).lineLimit(1)
                                 Spacer(minLength: 6)
                                 Text(label(s.state)).font(.system(size: 11.5)).foregroundStyle(Color(hex: STYLES[s.state]?.col ?? "#9398A1"))
+                                    .lineLimit(1)
                             }
                             .padding(.horizontal, 10)
                             .padding(.vertical, 7)
-                            .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.05)))
+                            .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(chosen ? 0.13 : 0.05)))
+                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(chosen ? 0.1 : 0)))
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .help("Ouvrir \(s.name) dans VS Code")
+                        .help("Écrire à \(s.name)")
                     }
                 }
                 .padding(10)
@@ -402,12 +443,133 @@ private struct OverviewPanel: View {
     private func label(_ s: BotState) -> String {
         switch s {
         case .working: "travaille"
-        case .approval: "attend ton feu vert"
+        case .approval: "à autoriser"
         case .waiting: "attend ta réponse"
         case .finished: "terminé"
         case .error: "erreur"
         case .sleeping, .idle, .dizzy: "au repos"
         }
+    }
+}
+
+/// Champ « Écris à Claude… » et bouton d'envoi, en bas de la section de gauche.
+private struct ComposeBar: View {
+    @ObservedObject var store: Store
+    var body: some View {
+        let empty = store.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        HStack(spacing: 6) {
+            ComposeField(text: $store.draft,
+                         placeholder: store.focused.map { "Écris à Claude (\($0.name))…" } ?? "Écris à Claude…",
+                         onSubmit: { store.submitDraft() },
+                         onEditing: { store.setComposing($0) })
+                .frame(height: 18)
+            Button { store.submitDraft() } label: {
+                Group {
+                    if store.sending { ProgressView().controlSize(.mini).tint(Color(hex: "#0B0C0E")) }
+                    else { Image(systemName: "arrow.up").font(.system(size: 11, weight: .bold)) }
+                }
+                .foregroundStyle(Color(hex: "#0B0C0E"))
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color(hex: "#F5F6F8")))
+            }
+            .buttonStyle(.plain)
+            .opacity(empty && !store.sending ? 0.3 : 1)
+            .disabled(empty || store.sending)
+            .help("Envoyer à Claude (Entrée)")
+        }
+        .padding(.leading, 11)
+        .padding(.trailing, 5)
+        .padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.white.opacity(store.composing ? 0.11 : 0.07)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(.white.opacity(store.composing ? 0.16 : 0.04)))
+        .animation(.easeOut(duration: 0.15), value: store.composing)
+    }
+}
+
+/// Étagère : les fichiers gardés. Glisser = déposer ailleurs ; clic = copier (à coller avec ⌘V).
+private struct ShelfPanel: View {
+    @ObservedObject var store: Store
+    var body: some View {
+        Card(wash: Color(hex: "#3B9EFF", 0.22)) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    if let notice = store.notice {
+                        Text(notice.text).font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(notice.ok ? Color(hex: "#5EE0AE") : Color(hex: "#FF8D97")).lineLimit(1)
+                    } else {
+                        Text(store.shelf.isEmpty ? "Glisse un fichier sur l'encoche pour le garder ici."
+                                                 : "Glisse-les où tu veux, ou clique pour copier.")
+                            .font(.system(size: 12)).foregroundStyle(Color(hex: "#9398A1")).lineLimit(1)
+                    }
+                    Spacer()
+                    if !store.shelf.isEmpty {
+                        Button("Vider") { store.clearShelf() }.buttonStyle(Pill())
+                    }
+                }
+                HStack(spacing: 6) {
+                    // Les plus récents d'abord ; au-delà de 6, on l'indique.
+                    ForEach(store.shelf.suffix(6).reversed(), id: \.self) { url in ShelfItem(store: store, url: url) }
+                    if store.shelf.count > 6 {
+                        Text("+\(store.shelf.count - 6)").font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Color(hex: "#9398A1")).padding(.leading, 4)
+                    }
+                }
+            }
+            .padding(.leading, 100)
+            .padding(.trailing, 12)
+            .padding(.vertical, 12)
+        }
+    }
+}
+
+private struct ShelfItem: View {
+    @ObservedObject var store: Store
+    let url: URL
+    @State private var hover = false
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
+                .resizable().interpolation(.high)
+                .frame(width: 40, height: 40)
+            Text(url.lastPathComponent)
+                .font(.system(size: 10.5))
+                .foregroundStyle(Color(hex: "#C9CCD2"))
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .truncationMode(.middle)
+                .frame(width: 70, height: 28, alignment: .top)
+        }
+        .padding(.vertical, 5)
+        .frame(width: 78)
+        .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(hover ? 0.1 : 0.04)))
+        .overlay(alignment: .topTrailing) {
+            if hover {
+                Button { store.unshelve(url) } label: {
+                    Image(systemName: "xmark").font(.system(size: 7.5, weight: .bold))
+                        .foregroundStyle(Color(hex: "#F5F6F8"))
+                        .frame(width: 16, height: 16)
+                        .background(Circle().fill(Color(hex: "#3A3D44")))
+                }
+                .buttonStyle(.plain)
+                .help("Retirer de l'étagère")
+                .offset(x: 3, y: -3)
+            }
+        }
+        .contentShape(Rectangle())
+        .onHover { hover = $0 }
+        .onTapGesture { store.copyFile(url) }
+        .onDrag {
+            store.startDragOut()
+            return NSItemProvider(contentsOf: url) ?? NSItemProvider(object: url as NSURL)
+        }
+        .contextMenu {
+            Button("Copier") { store.copyFile(url) }
+            Button("Afficher dans le Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            Divider()
+            Button("Retirer de l'étagère") { store.unshelve(url) }
+        }
+        .help(url.path)
     }
 }
 
@@ -483,33 +645,56 @@ private struct ErrorPanel: View {
     }
 }
 
+/// Fichiers glissés vers l'encoche : à gauche on les garde (étagère), à droite on les convertit.
 private struct UploadPanel: View {
     @ObservedObject var store: Store
+    var body: some View {
+        HStack(spacing: 10) {
+            DropZone(targeted: $store.dropKeep, color: "#3B9EFF", title: "Garder ici",
+                     tags: ["Le temps de le coller ailleurs"], leading: 112) { store.keep($0) }
+                .frame(width: 300)
+            DropZone(targeted: $store.dropTargeted, color: "#34D399", title: "Convertir",
+                     tags: ["WebP", "JPG", "PDF"], leading: 18) { store.dropped($0) }
+        }
+    }
+}
+
+private struct DropZone: View {
+    @Binding var targeted: Bool
+    let color: String
+    let title: String
+    let tags: [String]
+    let leading: Double
+    let onFiles: ([URL]) -> Void
+
     var body: some View {
         ZStack(alignment: .leading) {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(Color(hex: "#121316"))
                 .overlay {
-                    RadialGradient(colors: [Color(hex: "#34D399", store.dropTargeted ? 0.6 : 0.25), .clear],
-                                   center: UnitPoint(x: 0.5, y: 1.4), startRadius: 0, endRadius: 360)
+                    RadialGradient(colors: [Color(hex: color, targeted ? 0.6 : 0.22), .clear],
+                                   center: UnitPoint(x: 0.5, y: 1.4), startRadius: 0, endRadius: 300)
                         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 }
                 .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
                     .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
-                    .foregroundStyle(store.dropTargeted ? Color(hex: "#34D399", 0.55) : .white.opacity(0.14)))
+                    .foregroundStyle(targeted ? Color(hex: color, 0.6) : .white.opacity(0.14)))
             VStack(alignment: .leading, spacing: 8) {
-                big("Dépose tes fichiers ici")
+                big(title)
                 HStack(spacing: 6) {
-                    ForEach(["PDF", "Images", "Dossiers"], id: \.self) {
-                        Text($0).font(.system(size: 11)).foregroundStyle(Color(hex: "#B9BDC4"))
+                    ForEach(tags, id: \.self) {
+                        Text($0).font(.system(size: 11)).foregroundStyle(Color(hex: "#B9BDC4")).lineLimit(1)
                             .padding(.horizontal, 8).padding(.vertical, 3)
                             .background(Capsule().fill(.white.opacity(0.07)))
                     }
                 }
             }
-            .padding(.leading, 200)
+            .padding(.leading, leading)
+            .padding(.trailing, 10)
         }
-        .onDrop(of: [.fileURL], isTargeted: $store.dropTargeted) { providers in
+        .scaleEffect(targeted ? 1.015 : 1)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: targeted)
+        .onDrop(of: [.fileURL], isTargeted: $targeted) { providers in
             let group = DispatchGroup()
             var urls = [URL?](repeating: nil, count: providers.count)
             let lock = NSLock()
@@ -520,7 +705,7 @@ private struct UploadPanel: View {
                     group.leave()
                 }
             }
-            group.notify(queue: .main) { store.dropped(urls.compactMap { $0 }) }
+            group.notify(queue: .main) { onFiles(urls.compactMap { $0 }) }
             return true
         }
     }

@@ -12,6 +12,7 @@ struct Session: Identifiable {
     var history: [String] = []
     var updated = Date()
     var termProgram = ""
+    var entrypoint = ""  // "claude-vscode" : session de l'extension VS Code (onglet Claude Code)
     var message = ""
 }
 
@@ -25,7 +26,7 @@ struct Permission: Identifiable {
 }
 
 enum Mode { case hidden, compact, expanded }
-enum Panel: Equatable { case greeting, overview, empty, approval, finished, error, upload, choose, converting, result }
+enum Panel: Equatable { case greeting, overview, empty, approval, finished, error, upload, choose, converting, result, shelf }
 
 private let PALETTE = ["#FF6B5B", "#2DD4A7", "#F7B32B", "#A78BFA", "#38BDF8", "#F472B6"]
 
@@ -44,6 +45,21 @@ final class Store: ObservableObject {
     @Published var result = ""
     @Published var resultOK = true
     @Published var dropTargeted = false
+    @Published var dropKeep = false
+
+    /// Texte tapé dans la section de gauche, pour la session choisie.
+    @Published var draft = ""
+    @Published var composing = false  // le champ a le clavier
+    @Published var sending = false
+    @Published var notice: (text: String, ok: Bool)?
+    /// Rend le clavier à l'app de devant (fourni par AppDelegate, qui tient le panneau).
+    var releaseKeyboard: () -> Void = {}
+
+    /// Étagère : fichiers gardés dans l'encoche le temps de les déposer ou coller ailleurs.
+    @Published var shelf: [URL] = (UserDefaults.standard.stringArray(forKey: "shelf") ?? [])
+        .filter { FileManager.default.fileExists(atPath: $0) }.map { URL(fileURLWithPath: $0) }
+    /// Un fichier de l'étagère est en train d'être glissé dehors (ce n'est pas un dépôt).
+    var draggingOut = false
 
     let mochi = Mochi(now: CACurrentMediaTime())
     private(set) var minis: [String: Mochi] = [:]
@@ -52,6 +68,7 @@ final class Store: ObservableObject {
 
     private var hovering = false
     private var fileDragging = false
+    private var droppedAt = Date.distantPast
     private var pinUntil: Date?
     private var lastGreet = Date.distantPast
     private var lastActivity = Date()
@@ -82,7 +99,7 @@ final class Store: ObservableObject {
         case .empty: 150
         case .approval: 206
         case .finished, .error, .choose: 176
-        case .upload: 176
+        case .upload, .shelf: 176
         case .converting, .result: 150
         }
         return base + max(0, notch.height - 32)
@@ -105,7 +122,7 @@ final class Store: ObservableObject {
             let h = viewHeight, mid = cardTop + (h - cardTop - 10) / 2
             switch view {
             case .greeting: return (320, cardTop + 54, 58)
-            case .upload: return (140, mid, 50)
+            case .upload: return (62, mid, 38)
             case .converting: return (54, mid, 30)
             default: return (60, mid, 40)
             }
@@ -139,13 +156,20 @@ final class Store: ObservableObject {
     }
 
     private var pinned: Bool {
+        if composing || sending { return true }
         if !permissions.isEmpty && mode == .expanded && view == .approval { return true }
         if view == .choose || view == .converting || fileDragging { return true }
         if let pinUntil, Date() < pinUntil { return true }
         return false
     }
 
-    private var defaultView: Panel { sessions.isEmpty ? .empty : .overview }
+    private var defaultView: Panel { !sessions.isEmpty ? .overview : shelf.isEmpty ? .empty : .shelf }
+
+    /// Bouton de l'étagère dans le bandeau : ouvre l'étagère, ou revient à la vue normale.
+    func toggleShelf() {
+        Sound.shared.play("blip")
+        withAnimation(Self.openAnimation) { view = view == .shelf ? (sessions.isEmpty ? .empty : .overview) : .shelf }
+    }
 
     func expandDefault() {
         if !permissions.isEmpty { return show(.approval) }
@@ -175,6 +199,7 @@ final class Store: ObservableObject {
     func collapse() {
         let was = mode
         pinUntil = nil
+        if composing { setComposing(false) }
         let target: Mode = sessions.isEmpty ? .hidden : .compact
         guard mode != target else { return }
         withAnimation(Self.closeAnimation) {
@@ -221,6 +246,7 @@ final class Store: ObservableObject {
     }
 
     func setFileDrag(_ near: Bool) {
+        if draggingOut { return }  // on sort un fichier de l'étagère : ce n'est pas un dépôt
         if near && !fileDragging {
             fileDragging = true
             show(.upload, sound: "hover")
@@ -229,7 +255,7 @@ final class Store: ObservableObject {
             fileDragging = false
             // Laisse le temps au dépôt d'arriver (le bouton est relâché juste avant).
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                guard self.view == .upload, !self.fileDragging else { return }
+                guard self.view == .upload, !self.fileDragging, Date().timeIntervalSince(self.droppedAt) > 1 else { return }
                 self.mochi.setMouth(0)
                 if !self.hovering { self.collapse() } else { self.show(self.defaultView, sound: nil) }
             }
@@ -239,11 +265,146 @@ final class Store: ObservableObject {
     func dropped(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
         fileDragging = false
+        droppedAt = Date()
         files = urls
         mochi.emote(.gulp, 0.6)
         mochi.setMouth(0)
         Sound.shared.play("gulp")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { self.show(.choose, sound: nil) }
+    }
+
+    // MARK: Étagère
+
+    /// Dépôt sur « Garder ici » : les fichiers restent dans l'encoche (même après redémarrage).
+    func keep(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        fileDragging = false
+        droppedAt = Date()
+        for u in urls where !shelf.contains(u) { shelf.append(u) }
+        saveShelf()
+        mochi.emote(.gulp, 0.6)
+        mochi.setMouth(0)
+        Sound.shared.play("gulp")
+        pinUntil = Date().addingTimeInterval(2.5)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { self.show(.shelf, sound: nil) }
+    }
+
+    func unshelve(_ u: URL) {
+        withAnimation(.easeOut(duration: 0.2)) { shelf.removeAll { $0 == u } }
+        saveShelf()
+        Sound.shared.play("blip")
+        if shelf.isEmpty && view == .shelf { show(defaultView, sound: nil) }
+    }
+
+    func clearShelf() {
+        shelf = []
+        saveShelf()
+        Sound.shared.play("close")
+        show(defaultView, sound: nil)
+    }
+
+    /// Clic sur un fichier : copié, prêt à être collé (⌘V) dans le Finder, un mail, un message…
+    func copyFile(_ u: URL) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.writeObjects([u as NSURL])
+        Sound.shared.play("pop")
+        mochi.emote(.happy, 0.8)
+        say("\(u.lastPathComponent) copié : colle-le où tu veux (⌘V)", ok: true)
+    }
+
+    func startDragOut() {
+        draggingOut = true
+        Sound.shared.play("peek")
+    }
+
+    /// Appelé par le suivi de souris quand le bouton est relâché.
+    func mouseReleased() {
+        guard draggingOut else { return }
+        draggingOut = false
+        shelf = shelf.filter { FileManager.default.fileExists(atPath: $0.path) }  // déplacé ailleurs ?
+        saveShelf()
+    }
+
+    private func saveShelf() {
+        UserDefaults.standard.set(shelf.map(\.path), forKey: "shelf")
+    }
+
+    // MARK: Écrire à Claude (section de gauche)
+
+    func select(_ s: Session) {
+        guard focus != s.id else { return }
+        focus = s.id
+        Sound.shared.play("tick")
+    }
+
+    /// Le champ prend ou rend le clavier.
+    func setComposing(_ on: Bool) {
+        guard on != composing else { return }
+        composing = on
+        if on {
+            lastActivity = Date()
+            mochi.blink()
+        } else {
+            releaseKeyboard()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                if !self.hovering && !self.pinned { self.collapse() }
+            }
+        }
+    }
+
+    /// Le clavier est parti ailleurs (clic dans une autre app) : on arrête d'écrire, le brouillon reste.
+    func keyboardLost() {
+        guard composing else { return }
+        composing = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            if !self.hovering && !self.pinned { self.collapse() }
+        }
+    }
+
+    /// Entrée : le message part dans la session choisie (voir Courier).
+    func submitDraft() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !sending, let s = focused else { return }
+        if permissions.contains(where: { $0.session == s.id }) {
+            return say("Réponds d'abord à sa demande d'autorisation.", ok: false)
+        }
+        sending = true
+        composing = false  // VS Code va prendre le clavier
+        notice = ("Envoi à \(s.name)…", true)
+        Courier.send(text, to: s) { outcome in
+            self.sending = false
+            switch outcome {
+            case .sent:
+                self.draft = ""
+                self.mochi.emote(.happy, 0.9)
+                Sound.shared.play("approve")
+                self.say("Envoyé à Claude ✓", ok: true)
+            case .copied:
+                self.draft = ""
+                Sound.shared.play("pop")
+                self.say("Copié ✓ Colle-le dans la session : ⌘V puis Entrée", ok: true)
+            case .needsPermission:
+                self.releaseKeyboard()
+                Sound.shared.play("question")
+                self.say("Autorise Encoche dans Réglages Système → Accessibilité, puis renvoie.", ok: false, for: 6)
+            case .failed(let why):
+                self.releaseKeyboard()
+                Sound.shared.play("error")
+                self.mochi.emote(.annoyed, 0.8)
+                self.say(why, ok: false, for: 5)
+            }
+        }
+    }
+
+    /// Petit message dans la carte de gauche (ou de l'étagère), quelques secondes.
+    func say(_ text: String, ok: Bool, for seconds: Double = 3) {
+        notice = (text, ok)
+        pinUntil = Date().addingTimeInterval(seconds)
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds + 0.2) {
+            if self.notice?.text == text { self.notice = nil }
+            if !self.hovering && !self.pinned { self.collapse() }
+        }
     }
 
     // MARK: Événements Claude Code
@@ -272,6 +433,7 @@ final class Store: ObservableObject {
         s.cwd = cwd
         s.updated = Date()
         if let term = ev["term_program"] as? String, !term.isEmpty { s.termProgram = term }
+        if let entry = ev["entrypoint"] as? String, !entry.isEmpty { s.entrypoint = entry }
 
         switch event {
         case "SessionStart":
@@ -297,7 +459,7 @@ final class Store: ObservableObject {
             let (title, detail) = permissionText(ev["tool_name"] as? String ?? "", ev["tool_input"] as? [String: Any] ?? [:])
             permissions.append(Permission(session: sid, title: title, detail: detail, responder: responder))
             s.state = .approval
-            focus = sid
+            if draft.isEmpty && !sending { focus = sid }  // pas de changement de destinataire en pleine écriture
             store(s)
             alert(.approval, state: .approval)
             // Claude Code abandonne le hook après 120 s : on retire la demande avant.
@@ -314,7 +476,7 @@ final class Store: ObservableObject {
         case "Stop":
             s.state = .finished
             s.line = "Terminé"
-            focus = sid
+            if draft.isEmpty && !sending { focus = sid }  // pas de changement de destinataire en pleine écriture
             store(s)
             if permissions.isEmpty && view != .choose && view != .converting {
                 alert(.finished, state: .finished)
@@ -328,7 +490,7 @@ final class Store: ObservableObject {
         case "StopFailure":
             s.state = .error
             s.message = (ev["error"] as? String) ?? (ev["message"] as? String) ?? "La réponse de Claude a échoué."
-            focus = sid
+            if draft.isEmpty && !sending { focus = sid }  // pas de changement de destinataire en pleine écriture
             store(s)
             alert(.error, state: .error)
             pinUntil = Date().addingTimeInterval(8)
@@ -418,19 +580,35 @@ final class Store: ObservableObject {
     // MARK: Aller à la session (VS Code, Terminal…)
 
     func jump(to s: Session) {
+        openSession(s)
+        Sound.shared.play("blip")
+        collapse()
+    }
+
+    /// Fait passer la session devant : VS Code (la fenêtre du dossier, puis l'onglet exact de la
+    /// session pour l'extension Claude Code), Terminal ou iTerm.
+    func openSession(_ s: Session) {
         let ws = NSWorkspace.shared
         let bundle: String
         switch s.termProgram {
+        case _ where s.entrypoint == "claude-vscode": bundle = "com.microsoft.VSCode"
         case "Apple_Terminal": bundle = "com.apple.Terminal"
         case "iTerm.app": bundle = "com.googlecode.iterm2"
         default: bundle = "com.microsoft.VSCode"
         }
-        if let app = ws.urlForApplication(withBundleIdentifier: bundle) {
-            let urls = bundle == "com.microsoft.VSCode" ? [URL(fileURLWithPath: s.cwd)] : []
-            ws.open(urls, withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+        guard let app = ws.urlForApplication(withBundleIdentifier: bundle) else { return }
+        let urls = bundle == "com.microsoft.VSCode" ? [URL(fileURLWithPath: s.cwd)] : []
+        ws.open(urls, withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+        // Une fois la bonne fenêtre devant (le lien va à la fenêtre active), on montre l'onglet.
+        guard let link = Courier.sessionLink(s) else { return }
+        func reveal(_ tries: Int) {
+            if ws.frontmostApplication?.bundleIdentifier == bundle {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { ws.open(link) }
+            } else if tries > 0 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { reveal(tries - 1) }
+            }
         }
-        Sound.shared.play("blip")
-        collapse()
+        reveal(30)
     }
 
     func dismissCurrent() {
