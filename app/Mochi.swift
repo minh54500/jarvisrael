@@ -478,11 +478,58 @@ final class Mochi {
         case .kippah:
             drawPayot(ctx, hw: hw, hh: hh)
             drawKippah(ctx, hw: hw, hh: hh)
+        case .fez: drawFez(ctx, hw: hw, hh: hh)
         case .headphones: drawHeadphones(ctx, hw: hw, hh: hh)
         case .crown: drawCrown(ctx, hw: hw, hh: hh)
         case .beanie: drawBeanie(ctx, hw: hw, hh: hh)
         case .cap: drawCap(ctx, hw: hw, hh: hh)
         }
+    }
+
+    /// Skin Turc : grande barbe noire, moustache, et le fez rouge à pompon noir.
+    private func drawFez(_ ctx: GraphicsContext, hw: Double, hh: Double) {
+        let black = Color(hex: "#0C0C12")
+        // Barbe : elle part du bas des joues, entoure la bouche par en dessous et dépasse sous la tête, en vagues.
+        var beard = Path()
+        beard.move(to: CGPoint(x: -hw * 1.0, y: hh * 0.02))
+        beard.addCurve(to: CGPoint(x: -hw * 0.5, y: hh * 1.1), control1: CGPoint(x: -hw * 1.1, y: hh * 0.6), control2: CGPoint(x: -hw * 0.85, y: hh * 1.0))
+        beard.addQuadCurve(to: CGPoint(x: 0, y: hh * 1.22), control: CGPoint(x: -hw * 0.25, y: hh * 1.24))
+        beard.addQuadCurve(to: CGPoint(x: hw * 0.5, y: hh * 1.1), control: CGPoint(x: hw * 0.25, y: hh * 1.24))
+        beard.addCurve(to: CGPoint(x: hw * 1.0, y: hh * 0.02), control1: CGPoint(x: hw * 0.85, y: hh * 1.0), control2: CGPoint(x: hw * 1.1, y: hh * 0.6))
+        beard.addCurve(to: CGPoint(x: 0, y: hh * 0.66), control1: CGPoint(x: hw * 0.78, y: hh * 0.5), control2: CGPoint(x: hw * 0.32, y: hh * 0.68))
+        beard.addCurve(to: CGPoint(x: -hw * 1.0, y: hh * 0.02), control1: CGPoint(x: -hw * 0.32, y: hh * 0.68), control2: CGPoint(x: -hw * 0.78, y: hh * 0.5))
+        beard.closeSubpath()
+        ctx.fill(beard, with: .color(black))
+        // Moustache : deux mèches qui remontent au bout.
+        for side in [-1.0, 1.0] {
+            var m = Path()
+            m.move(to: CGPoint(x: 0, y: hh * 0.24))
+            m.addCurve(to: CGPoint(x: side * hw * 0.62, y: hh * 0.2), control1: CGPoint(x: side * hw * 0.2, y: hh * 0.14), control2: CGPoint(x: side * hw * 0.45, y: hh * 0.42))
+            m.addQuadCurve(to: CGPoint(x: side * hw * 0.5, y: hh * 0.08), control: CGPoint(x: side * hw * 0.68, y: hh * 0.08))
+            m.addCurve(to: CGPoint(x: 0, y: hh * 0.4), control1: CGPoint(x: side * hw * 0.55, y: hh * 0.5), control2: CGPoint(x: side * hw * 0.15, y: hh * 0.46))
+            m.closeSubpath()
+            ctx.fill(m, with: .color(black))
+        }
+        // Fez : tronc de cône rouge posé sur le haut de la tête.
+        let bottom = -hh * 0.8, top = -hh * 1.8, wb = hw * 0.58, wt = hw * 0.43
+        var fez = Path()
+        fez.move(to: CGPoint(x: -wb, y: bottom))
+        fez.addLine(to: CGPoint(x: -wt, y: top + hh * 0.06))
+        fez.addQuadCurve(to: CGPoint(x: wt, y: top + hh * 0.06), control: CGPoint(x: 0, y: top - hh * 0.04))
+        fez.addLine(to: CGPoint(x: wb, y: bottom))
+        fez.addQuadCurve(to: CGPoint(x: -wb, y: bottom), control: CGPoint(x: 0, y: bottom + hh * 0.12))
+        fez.closeSubpath()
+        ctx.fill(fez, with: .linearGradient(Gradient(colors: [Color(hex: "#E8303A"), Color(hex: "#B5121D")]),
+                                            startPoint: CGPoint(x: -wb, y: top), endPoint: CGPoint(x: wb, y: bottom)))
+        guard !mini else { return }
+        ctx.fill(Path(ellipseIn: CGRect(cx: 0, cy: top + hh * 0.05, w: wt * 1.9, h: hh * 0.1)), with: .color(Color(hex: "#C81E28")))
+        // Pompon : un cordon noir qui part du sommet et pend sur le côté.
+        var cord = Path()
+        cord.move(to: CGPoint(x: 0, y: top + hh * 0.04))
+        cord.addQuadCurve(to: CGPoint(x: wt * 0.92, y: top + hh * 0.2), control: CGPoint(x: wt * 0.75, y: top - hh * 0.02))
+        cord.addLine(to: CGPoint(x: wt * 0.98, y: top + hh * 0.45))
+        ctx.stroke(cord, with: .color(black), style: StrokeStyle(lineWidth: max(0.6, hh * 0.045), lineCap: .round, lineJoin: .round))
+        ctx.fill(Path(roundedRect: CGRect(cx: wt * 0.98, cy: top + hh * 0.53, w: hh * 0.1, h: hh * 0.2), cornerRadius: hh * 0.05), with: .color(black))
     }
 
     /// Casque audio : arceau par-dessus, deux écouteurs sur les côtés.
