@@ -15,7 +15,6 @@ Un petit bonhomme qui vit dans l'encoche de ton Mac et garde un œil sur Claude 
 - **Spotify** : le morceau en cours, lecture/pause, précédent/suivant.
 - **Rappels** : pause, verre d'eau, « va dormir »… Tout se coupe dans les Réglages.
 - **Entre potes** : partagez un groupe, voyez les bonshommes des autres (et s'ils sont sur leur Mac), discutez dans le chat, envoyez-vous des cœurs.
-- **Conversations privées** : discute à deux avec quelqu'un hors du groupe, même sur son téléphone (elle ou il reçoit tes messages dans l'app ntfy et répond de là).
 - **Le plan de Claude** : sa liste de tâches, cochée au fur et à mesure.
 - **Notifications sur ton téléphone** avec [ntfy](https://ntfy.sh), si tu veux (désactivé par défaut).
 

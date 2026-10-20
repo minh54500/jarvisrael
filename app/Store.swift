@@ -121,7 +121,6 @@ struct Toast: Equatable {
     var title: String
     var text: String
     var opensChat = false
-    var conv: String?      // la conversation à ouvrir
 }
 enum Panel: Equatable { case greeting, overview, empty, approval, finished, error, upload, choose, converting, result, shelf, music, dev, care, todos, friends }
 
@@ -202,8 +201,7 @@ final class Store: ObservableObject {
         case .dev: devShowsServers ? 206 : 246
         case .care: 164
         case .todos: 216
-        case .friends: friendsShowsChat || !Friends.shared.configured && Friends.shared.hasChat
-            ? (Friends.shared.conversations.count > 1 ? 266 : 240) : 190
+        case .friends: friendsShowsChat ? 240 : 190
         case .upload, .shelf, .music: 176
         case .converting, .result: 150
         }
@@ -1154,10 +1152,7 @@ final class Store: ObservableObject {
     func openToast() {
         guard let t = toast else { return }
         toast = nil
-        if t.opensChat {
-            friendsShowsChat = true
-            if let c = t.conv { Friends.shared.select(c) } else { Friends.shared.markRead() }
-        }
+        if t.opensChat { friendsShowsChat = true; Friends.shared.markRead() }
         show(t.opensChat ? .friends : defaultView)
     }
 
@@ -1167,11 +1162,11 @@ final class Store: ObservableObject {
     var chatVisible: Bool { mode == .expanded && view == .friends && friendsShowsChat }
 
     /// Un message d'un pote : le bonhomme réagit, et le chat s'ouvre si on n'est pas occupé.
-    func chatReceived(from name: String, color: String, text: String, conv: String) {
+    func chatReceived(from name: String, color: String, text: String) {
         Sound.shared.play("question")
         mochi.emote(.happy, 1.5)
         Phone.notify("Message de \(name)", text, tag: "speech_balloon")
-        showToast(Toast(icon: nil, color: color, title: name, text: text, opensChat: true, conv: conv))
+        showToast(Toast(icon: nil, color: color, title: name, text: text, opensChat: true))
     }
 
     /// Change le skin du bonhomme (et des mini-bonshommes des sessions).

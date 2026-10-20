@@ -44,30 +44,12 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         var mine: Bool
         /// Mes messages : « sending », « sent » ou « failed » (absent pour ceux des potes).
         var state: String?
-        /// Sujet de la conversation (nil : le chat du groupe, messages d'avant les conversations privées).
-        var conv: String?
-    }
-
-    /// Une conversation : le chat du groupe, ou une conversation privée à deux (son propre sujet secret).
-    struct Conversation: Identifiable, Codable, Equatable {
-        let id: String      // le sujet ntfy
-        var name: String
-        var isGroup = false
     }
 
     @Published private(set) var list: [Friend] = []
     @Published private(set) var notice: String?
     @Published private(set) var chat: [Message] = []
-    @Published private(set) var unreadBy: [String: Int] = [:]
-    var unread: Int { unreadBy.values.reduce(0, +) }
-    /// Conversations privées (hors du groupe), gardées d'un lancement à l'autre.
-    @Published private(set) var privates: [Conversation] = {
-        guard let d = UserDefaults.standard.data(forKey: "chat.privates") else { return [] }
-        return (try? JSONDecoder().decode([Conversation].self, from: d)) ?? []
-    }()
-    @Published var currentConv = UserDefaults.standard.string(forKey: "chat.current") ?? "" {
-        didSet { UserDefaults.standard.set(currentConv, forKey: "chat.current") }
-    }
+    @Published private(set) var unread = 0
     @Published var draft = ""
 
     // Réglages (fenêtre Réglages, section « Entre potes »).
@@ -78,11 +60,6 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         return String((n.isEmpty ? "Un pote" : n).prefix(20))
     }
     var configured: Bool { enabled && !group.isEmpty }
-
-    /// Le chat a son propre sujet ntfy, en texte lisible : un pote sur téléphone s'y abonne dans l'app ntfy,
-    /// reçoit « Minh : … » en notification et répond depuis l'app (son prénom en titre).
-    var chatTopic: String { group + "-chat" }
-    var chatLink: String { "\(Self.server)/\(chatTopic)" }
     let me: String = {
         if let id = UserDefaults.standard.string(forKey: "friends.id") { return id }
         let id = UUID().uuidString
@@ -140,16 +117,13 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         presenceTimer?.invalidate()
         list = []
         sent = nil
-        // Autre groupe : le chat de l'ancien groupe s'en va (les conversations privées restent).
-        let old = UserDefaults.standard.string(forKey: "friends.chatGroup") ?? ""
-        if old != group {
+        // Autre groupe : on repart d'un chat vide.
+        if UserDefaults.standard.string(forKey: "friends.chatGroup") != group {
             UserDefaults.standard.set(group, forKey: "friends.chatGroup")
-            chat.removeAll { $0.conv == nil || $0.conv == old + "-chat" }
-            unreadBy[old + "-chat"] = nil
+            chat = []
+            unread = 0
             saveChat()
         }
-        if !conversations.contains(where: { $0.id == currentConv }) { currentConv = conversations.first?.id ?? "" }
-        if hasChat { connect() }
         guard configured else { return }
         presence = .active
         presenceSince = Date()
@@ -237,67 +211,25 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
 
     static let chatLimit = 500
 
-    /// Il y a au moins une conversation : celle du groupe, ou une privée.
-    var hasChat: Bool { configured || !privates.isEmpty }
-
-    var conversations: [Conversation] {
-        (configured ? [Conversation(id: chatTopic, name: "Groupe", isGroup: true)] : []) + privates
-    }
-
-    /// Les messages d'une conversation (ceux d'avant les conversations privées vont au groupe).
-    func messages(_ conv: String) -> [Message] {
-        chat.filter { ($0.conv ?? chatTopic) == conv }
-    }
-
-    static func link(_ topic: String) -> String { "\(server)/\(topic)" }
-
-    func select(_ conv: String) {
-        currentConv = conv
-        markRead()
-    }
-
-    /// Nouvelle conversation privée : un sujet secret rien qu'à vous deux.
-    func createPrivate(_ who: String) {
-        let chars = Array("abcdefghijkmnpqrstuvwxyz23456789")
-        let c = Conversation(id: "encoche-prive-" + String((0..<14).map { _ in chars.randomElement()! }), name: String(who.prefix(20)))
-        privates.append(c)
-        savePrivates()
-        currentConv = c.id
-        restart()
-    }
-
-    func removePrivate(_ c: Conversation) {
-        privates.removeAll { $0.id == c.id }
-        chat.removeAll { $0.conv == c.id }
-        unreadBy[c.id] = nil
-        savePrivates()
-        saveChat()
-        restart()
-    }
-
-    private func savePrivates() {
-        if let d = try? JSONEncoder().encode(privates) { UserDefaults.standard.set(d, forKey: "chat.privates") }
-    }
-
     func sendChat(_ quick: String? = nil) {
         let text = String((quick ?? draft).trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.chatLimit))
-        guard !text.isEmpty, conversations.contains(where: { $0.id == currentConv }) else { return }
+        guard configured, !text.isEmpty else { return }
         let id = UUID().uuidString
-        add(Message(id: id, from: me, name: name, text: text, at: Date(), mine: true, state: "sending", conv: currentConv))
+        add(Message(id: id, from: me, name: name, text: text, at: Date(), mine: true, state: "sending"))
         if quick == nil { draft = "" }
         Sound.shared.play("pop")
-        deliver(id, text, to: currentConv)
+        deliver(id, text)
     }
 
     /// Réessayer un message qui n'est pas parti.
     func retry(_ m: Message) {
         guard m.mine, m.state == "failed" else { return }
         setState(m.id, "sending")
-        deliver(m.id, m.text, to: m.conv ?? chatTopic)
+        deliver(m.id, m.text)
     }
 
-    private func deliver(_ id: String, _ text: String, to topic: String) {
-        postChat(id, text, to: topic) { ok in
+    private func deliver(_ id: String, _ text: String) {
+        post(["kind": "chat", "text": text, "mid": id]) { ok in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     Friends.shared.setState(id, ok ? "sent" : "failed")
@@ -307,28 +239,13 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         }
     }
 
-    /// Message du chat : texte lisible, mon pseudo en titre, et nos repères dans les étiquettes.
-    private func postChat(_ id: String, _ text: String, to topic: String, done: @escaping (Bool) -> Void) {
-        guard let url = URL(string: Self.server) else { return done(false) }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: [
-            "topic": topic, "title": name, "message": text,
-            "tags": ["encoche", "from-\(me.lowercased())", "mid-\(id.lowercased())"],
-        ])
-        URLSession.shared.dataTask(with: req) { _, response, error in
-            done(error == nil && (response as? HTTPURLResponse)?.statusCode == 200)
-        }.resume()
-    }
-
     private func setState(_ id: String, _ state: String) {
         guard let i = chat.firstIndex(where: { $0.id == id }) else { return }
         chat[i].state = state
         saveChat()
     }
 
-    func markRead() { if unreadBy[currentConv] != nil { unreadBy[currentConv] = nil } }
+    func markRead() { if unread != 0 { unread = 0 } }
 
     private func add(_ m: Message) {
         guard !chat.contains(where: { $0.id == m.id }) else { return }
@@ -363,10 +280,8 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
     // MARK: Ce que je reçois (flux ntfy : une ligne JSON par message)
 
     private func connect() {
-        // Le groupe (humeurs + chat) et chaque conversation privée, dans un seul flux.
-        let topics = ((configured ? [group, chatTopic] : []) + privates.map(\.id))
-            .compactMap { $0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) }
-        guard !topics.isEmpty, let url = URL(string: "\(Self.server)/\(topics.joined(separator: ","))/json?since=6h") else { return }
+        guard configured, let topic = group.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "\(Self.server)/\(topic)/json?since=6h") else { return }
         if stream == nil {
             let config = URLSessionConfiguration.default
             config.timeoutIntervalForRequest = 150  // ntfy envoie un signe de vie toutes les 45 s
@@ -395,17 +310,14 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
             task = nil
             // Coupure (Wi-Fi, veille) : on se rebranche un peu plus tard.
             DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
-                if Friends.shared.hasChat && Friends.shared.task == nil { Friends.shared.connect() }
+                if Friends.shared.configured && Friends.shared.task == nil { Friends.shared.connect() }
             }
         }
     }
 
     private func receive(_ line: Data) {
-        guard let ev = try? JSONSerialization.jsonObject(with: line) as? [String: Any], ev["event"] as? String == "message" else { return }
-        if let topic = ev["topic"] as? String, topic == chatTopic || privates.contains(where: { $0.id == topic }) {
-            return receiveChat(ev, conv: topic)
-        }
-        guard let text = ev["message"] as? String, let data = text.data(using: .utf8),
+        guard let ev = try? JSONSerialization.jsonObject(with: line) as? [String: Any], ev["event"] as? String == "message",
+              let text = ev["message"] as? String, let data = text.data(using: .utf8),
               let m = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               m["app"] as? String == "encoche", let id = m["id"] as? String, id != me else { return }
         let at = Date(timeIntervalSince1970: ev["time"] as? Double ?? Date().timeIntervalSince1970)
@@ -442,39 +354,16 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
             guard let body = m["text"] as? String, !body.isEmpty else { return }
             let mid = m["mid"] as? String ?? ev["id"] as? String ?? UUID().uuidString
             guard !chat.contains(where: { $0.id == mid }) else { return }
-            add(Message(id: mid, from: id, name: who, text: String(body.prefix(500)), at: at, mine: false, conv: chatTopic))
-            if fresh && !(Store.shared.chatVisible && currentConv == chatTopic) {
-                unreadBy[chatTopic, default: 0] += 1
+            add(Message(id: mid, from: id, name: who, text: String(body.prefix(500)), at: at, mine: false))
+            if fresh && !Store.shared.chatVisible {
+                unread += 1
                 let f = list.first { $0.id == id }
-                Store.shared.chatReceived(from: who, color: f?.mochi.tint ?? f?.mochi.skin.aura ?? "#FF8BC4", text: body, conv: chatTopic)
+                Store.shared.chatReceived(from: who, color: f?.mochi.tint ?? f?.mochi.skin.aura ?? "#FF8BC4", text: body)
             }
         default:
             break
         }
     }
-
-    /// Un message du sujet du chat : d'un pote sur Mac (ses repères dans les étiquettes) ou d'un téléphone
-    /// (texte simple, son prénom en titre).
-    private func receiveChat(_ ev: [String: Any], conv: String) {
-        guard let body = (ev["message"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !body.isEmpty else { return }
-        let tags = (ev["tags"] as? [String] ?? []).map { $0.lowercased() }
-        let from = tags.first { $0.hasPrefix("from-") }.map { String($0.dropFirst(5)) }
-        if from == me.lowercased() { return }  // mon propre message qui revient
-        let mid = tags.first { $0.hasPrefix("mid-") }.map { String($0.dropFirst(4)) } ?? ev["id"] as? String ?? UUID().uuidString
-        guard !chat.contains(where: { $0.id.lowercased() == mid }) else { return }
-        let title = (ev["title"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
-        let fallback = privates.first { $0.id == conv }?.name ?? "Téléphone"  // en privé : le prénom de la conversation
-        let who = String((title.isEmpty ? fallback : title).prefix(20))
-        let sender = from.flatMap { id in list.first { $0.id.lowercased() == id }?.id } ?? from ?? "phone:" + who
-        let at = Date(timeIntervalSince1970: ev["time"] as? Double ?? Date().timeIntervalSince1970)
-        add(Message(id: mid, from: sender, name: who, text: String(body.prefix(Self.chatLimit)), at: at, mine: false, conv: conv))
-        guard Date().timeIntervalSince(at) < 120, !(Store.shared.chatVisible && currentConv == conv) else { return }
-        unreadBy[conv, default: 0] += 1
-        let f = list.first { $0.id == sender }
-        Store.shared.chatReceived(from: who, color: f?.mochi.tint ?? f?.mochi.skin.aura ?? Self.phoneColor, text: body, conv: conv)
-    }
-
-    static let phoneColor = "#A78BFA"
 
     private func say(_ text: String) {
         notice = text

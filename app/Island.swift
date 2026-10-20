@@ -1674,9 +1674,7 @@ private struct FriendsPanel: View {
     var body: some View {
         Card(wash: Color(hex: "#F472B6", 0.24)) {
             Group {
-                if !friends.configured && friends.hasChat {
-                    ChatView(store: store)  // seulement des conversations privées
-                } else if !friends.configured {
+                if !friends.configured {
                     HStack(spacing: 16) {
                         VStack(alignment: .leading, spacing: 5) {
                             big("Joue avec tes potes.")
@@ -1727,20 +1725,15 @@ private struct ChatView: View {
     @ObservedObject var friends = Friends.shared
 
     private static let quick = ["Salut 👋", "Qui code en ce moment ?", "Pause café ?", "Je lance un build 🚀"]
-    private static let quickPrivate = ["Coucou ❤️", "Tu fais quoi ?", "Je finis et j'arrive", "Bonne nuit 🌙"]
-
-    private var isGroup: Bool { friends.conversations.first { $0.id == friends.currentConv }?.isGroup ?? true }
 
     var body: some View {
-        let list = friends.messages(friends.currentConv)
-        return VStack(spacing: 6) {
-            if friends.conversations.count > 1 { conversations }
+        VStack(spacing: 6) {
             ScrollViewReader { reader in
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 2) {
-                        if list.isEmpty { empty }
-                        ForEach(Array(list.enumerated()), id: \.element.id) { i, m in
-                            let prev = i > 0 ? list[i - 1] : nil
+                        if friends.chat.isEmpty { empty }
+                        ForEach(Array(friends.chat.enumerated()), id: \.element.id) { i, m in
+                            let prev = i > 0 ? friends.chat[i - 1] : nil
                             let pause = prev.map { m.at.timeIntervalSince($0.at) > 10 * 60 } ?? true
                             if pause { TimeSeparator(date: m.at) }
                             ChatRow(message: m, color: color(m), first: pause || prev?.from != m.from)
@@ -1750,53 +1743,20 @@ private struct ChatView: View {
                     .padding(.horizontal, 2)
                 }
                 .onAppear { reader.scrollTo("fin", anchor: .bottom); friends.markRead() }
-                .onChange(of: list.count) { _, _ in
+                .onChange(of: friends.chat.count) { _, _ in
                     withAnimation(.easeOut(duration: 0.2)) { reader.scrollTo("fin", anchor: .bottom) }
                     friends.markRead()
                 }
-                .onChange(of: friends.currentConv) { _, _ in reader.scrollTo("fin", anchor: .bottom) }
             }
             input
         }
-    }
-
-    /// Les conversations : le groupe, et chaque conversation privée (avec ses non-lus).
-    private var conversations: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 5) {
-                ForEach(friends.conversations) { c in
-                    let on = c.id == friends.currentConv, unread = friends.unreadBy[c.id] ?? 0
-                    Button { Sound.shared.play("tick"); friends.select(c.id) } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: c.isGroup ? "person.3.fill" : "lock.fill").font(.system(size: 8.5, weight: .bold))
-                            Text(c.name).font(Fonts.caption.weight(.semibold))
-                            if unread > 0 {
-                                Text("\(unread)").font(.system(size: 9.5, weight: .bold)).monospacedDigit()
-                                    .foregroundStyle(Color.onLight)
-                                    .padding(.horizontal, 4).frame(minWidth: 14, minHeight: 14)
-                                    .background(Capsule().fill(Color(hex: "#FF8BC4")))
-                            }
-                        }
-                        .foregroundStyle(on ? Color.ink : Color.muted)
-                        .padding(.horizontal, 9)
-                        .frame(height: 22)
-                        .background(Capsule().fill(.white.opacity(on ? 0.14 : 0.05)))
-                        .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .help(c.isGroup ? "Le chat du groupe de potes" : "Conversation privée avec \(c.name)")
-                    .accessibilityAddTraits(on ? .isSelected : [])
-                }
-            }
-        }
-        .frame(height: 22)
     }
 
     private var empty: some View {
         VStack(spacing: 8) {
             Text("Pas encore de message. Lance la conversation :").font(Fonts.label).foregroundStyle(Color.muted)
             HStack(spacing: 5) {
-                ForEach(isGroup ? Self.quick : Self.quickPrivate, id: \.self) { q in Button(q) { friends.sendChat(q) }.buttonStyle(Chip()) }
+                ForEach(Self.quick, id: \.self) { q in Button(q) { friends.sendChat(q) }.buttonStyle(Chip()) }
             }
         }
         .frame(maxWidth: .infinity)
@@ -1806,7 +1766,7 @@ private struct ChatView: View {
     private var input: some View {
         let count = friends.draft.count, empty = friends.draft.trimmingCharacters(in: .whitespaces).isEmpty
         return HStack(spacing: 6) {
-            ComposeField(text: $friends.draft, placeholder: placeholder,
+            ComposeField(text: $friends.draft, placeholder: "Écris à tes potes…",
                          onSubmit: { friends.sendChat() }, onEditing: { store.setComposing($0) })
                 .frame(height: 18)
             if count > Friends.chatLimit - 100 {  // on approche de la limite
@@ -1832,13 +1792,7 @@ private struct ChatView: View {
         .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).stroke(.white.opacity(store.composing ? 0.16 : 0.04)))
     }
 
-    private var placeholder: String {
-        guard let c = friends.conversations.first(where: { $0.id == friends.currentConv }), !c.isGroup else { return "Écris à tes potes…" }
-        return "Écris à \(c.name)…"
-    }
-
     private func color(_ m: Friends.Message) -> String {
-        if m.from.hasPrefix("phone:") { return Friends.phoneColor }
         let f = friends.list.first { $0.id == m.from }
         return f?.mochi.tint ?? f?.mochi.skin.aura ?? "#FF8BC4"
     }
@@ -1877,13 +1831,7 @@ private struct ChatRow: View {
             }
             VStack(alignment: message.mine ? .trailing : .leading, spacing: 2) {
                 if first && !message.mine {
-                    HStack(spacing: 3) {
-                        Text(message.name).font(Fonts.caption.weight(.semibold))
-                        if message.from.hasPrefix("phone:") {
-                            Image(systemName: "iphone").font(.system(size: 9, weight: .semibold)).help("Depuis son téléphone")
-                        }
-                    }
-                    .foregroundStyle(Color(hex: color))
+                    Text(message.name).font(Fonts.caption.weight(.semibold)).foregroundStyle(Color(hex: color))
                 }
                 Text(message.text)
                     .font(Fonts.label)
