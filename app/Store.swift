@@ -244,15 +244,54 @@ final class Store: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                 if !self.hovering && !self.pinned { self.collapse() }
             }
+            // Un clic dans un champ, puis on s'en va sans rien taper : on n'écrivait pas vraiment.
+            if composing && !typedSomething {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    if !self.hovering && self.composing && !self.typedSomething { self.close() }
+                }
+            }
         }
     }
 
+    /// Du texte en cours dans un des champs (Claude, mini-terminal, chat).
+    private var typedSomething: Bool {
+        [draft, Shell.shared.command, Friends.shared.draft].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
     private var pinned: Bool {
-        if composing || sending || menuOpen || Voice.shared.listening { return true }
+        // (Un menu ouvert depuis plus de 2 min : sa fermeture s'est perdue, il ne retient plus l'encoche.)
+        let menu = menuOpen && Date().timeIntervalSince(menuOpenedAt ?? .distantPast) < 120
+        if composing || sending || menu || Voice.shared.listening { return true }
         if !permissions.isEmpty && mode == .expanded && view == .approval { return true }
         if view == .choose || view == .converting || fileDragging { return true }
         if let pinUntil, Date() < pinUntil { return true }
         return false
+    }
+
+    private var menuOpenedAt: Date?
+    private var leftAt: Date?
+
+    /// Appelé à chaque passage du suivi de souris : l'encoche ouverte, souris dehors depuis un moment et plus
+    /// rien qui la retient (message, menu, écriture…) → elle se ferme. Avant, on ne vérifiait qu'une fois,
+    /// juste après la sortie de la souris : si quelque chose la retenait à cet instant, elle restait ouverte.
+    func watchdog() {
+        guard mode == .expanded, !hovering else { leftAt = nil; return }
+        let since = leftAt ?? Date()
+        leftAt = since
+        if Date().timeIntervalSince(since) > 0.35 && !pinned { collapse() }
+    }
+
+    /// La croix : fermer tout de suite, même si quelque chose la retenait (une demande d'autorisation
+    /// reste en attente : ⌥⇧Y / ⌥⇧N ou un survol la retrouvent).
+    func close() {
+        let hadKeyboard = composing
+        composing = false
+        Voice.shared.stop()
+        pinUntil = nil
+        collapse()
+        if hadKeyboard {  // le clavier est rendu une fois l'encoche fermée (sinon elle clignote)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { if !self.composing { self.releaseKeyboard() } }
+        }
     }
 
     private var defaultView: Panel {
@@ -537,12 +576,11 @@ final class Store: ObservableObject {
         lastActivity = Date()
         guard !sessions.isEmpty else {
             show(defaultView)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                if !self.hovering && !self.pinned { self.collapse() }
-            }
+            pinUntil = Date().addingTimeInterval(3)  // ouverte au clavier : la souris n'y est pas
             return
         }
         show(.overview)
+        pinUntil = Date().addingTimeInterval(1.5)  // le temps que le champ prenne le clavier
         wantsFocus = true
         if dictate { toggleDictation() }
     }
@@ -611,6 +649,7 @@ final class Store: ObservableObject {
         let base = draft.trimmingCharacters(in: .whitespaces)
         draft = base.isEmpty ? tag + " " : base + " " + tag + " "
         show(.overview, sound: nil)
+        pinUntil = Date().addingTimeInterval(1.5)
         wantsFocus = true
     }
 
@@ -667,6 +706,7 @@ final class Store: ObservableObject {
 
     func menuTracking(_ on: Bool) {
         menuOpen = on
+        menuOpenedAt = on ? Date() : nil
         if !on {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                 if !self.hovering && !self.pinned { self.collapse() }

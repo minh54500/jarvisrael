@@ -185,6 +185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let inside = hit.contains(p) && m.y <= f.maxY + 2
         if panel.ignoresMouseEvents == inside { panel.ignoresMouseEvents = !inside }
         store.setHover(inside)
+        store.watchdog()
         store.pointerMoved(to: p, mochiCenter: store.mode == .expanded ? store.mochiCenterInPanel : nil)
 
         let pressed = NSEvent.pressedMouseButtons & 1 != 0

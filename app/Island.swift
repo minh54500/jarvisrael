@@ -320,6 +320,10 @@ struct IslandContent: View {
                 .buttonStyle(IconButton())
                 .help("Réglages")
                 .accessibilityLabel("Réglages")
+            Button { store.close() } label: { Image(systemName: "xmark").font(.system(size: 11, weight: .bold)) }
+                .buttonStyle(IconButton())
+                .help("Fermer l'encoche")
+                .accessibilityLabel("Fermer l'encoche")
             .accessibilityLabel(Sound.shared.on ? "Couper le son" : "Activer le son")
         }
         .padding(.horizontal, 12)
