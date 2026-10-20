@@ -13,7 +13,7 @@ swiftc -O -parse-as-library -swift-version 5 -target $(uname -m)-apple-macos14 \
 [[ -x $APP/Contents/MacOS/Encoche ]] || { echo "✗ La compilation a échoué"; exit 1; }
 
 # Icône : le Mochi lui-même, dessiné par le code de l'app
-swiftc -O -parse-as-library -swift-version 5 app/Util.swift app/Mochi.swift tools/icon.swift -o build/icon 2>&1 | grep -E "error" || true
+swiftc -O -parse-as-library -swift-version 5 app/Util.swift app/Skins.swift app/Mochi.swift tools/icon.swift -o build/icon 2>&1 | grep -E "error" || true
 build/icon build/Encoche.iconset
 iconutil -c icns build/Encoche.iconset -o $RES/Encoche.icns
 

@@ -1002,6 +1002,17 @@ final class Store: ObservableObject {
             .compactMap(\.plan).first { $0.done < $0.total }
     }
 
+    /// Change le skin du bonhomme (et des mini-bonshommes des sessions).
+    func setSkin(_ s: Skin) {
+        UserDefaults.standard.set(s.id, forKey: "skin")
+        mochi.skin = s
+        for m in minis.values { m.skin = s }
+        mochi.emote(.happy, 1.2)
+        Sound.shared.play("pop")
+        Friends.shared.skinChanged()
+        objectWillChange.send()
+    }
+
     /// Un pote m'envoie un cœur ou un coucou : le bonhomme réagit, et l'onglet Potes s'ouvre si on n'est pas occupé.
     func poked(heart: Bool) {
         mochi.emote(heart ? .love : .wink, 2.2)

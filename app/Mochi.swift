@@ -36,7 +36,6 @@ let STYLES: [BotState: StateStyle] = [
 ]
 
 // Galet néon : dégradé rose → violet, reflet en haut à gauche, lueur violette ; yeux blanc-cyan qui brillent.
-private let TOP = RGB(hex: "#FF8BC4"), BOTTOM = RGB(hex: "#7B3DF2"), AURA = RGB(hex: "#8F4BFF")
 private let EYE = Color(hex: "#EFFCFF"), EYE_GLOW = Color(hex: "#4FD3FF")
 private let INK = Color(hex: "#16171A")
 private let ASPECT = 1.2
@@ -83,13 +82,15 @@ final class Mochi {
 
     let mini: Bool
     let bodyColor: RGB?
-    /// Regard demandé de l'extérieur (souris), -1…1, y positif = vers le bas.
+    /// Couleurs et accessoire (voir Skins.swift).
+    var skin: Skin    /// Regard demandé de l'extérieur (souris), -1…1, y positif = vers le bas.
     var lookTarget = (x: 0.0, y: 0.0)
     /// Coucou d'entrée en cours (instant de départ).
     private(set) var greetStart: Double?
     private var greet = (scale: 1.0, dx: 0.0, dy: 0.0, eyeDrop: 0.0, halo: 1.0)
 
-    init(mini: Bool = false, bodyColor: String? = nil, now: Double) {
+    init(mini: Bool = false, bodyColor: String? = nil, skin: Skin = .current, now: Double) {
+        self.skin = skin
         self.mini = mini
         self.bodyColor = bodyColor.map { RGB(hex: $0) }
         born = now - Double.random(in: 0...5)
@@ -343,7 +344,7 @@ final class Mochi {
 
         // halo
         if !mini {
-            let glow = RGB(hex: style.glow), a = style.glowAlpha * 0.6 * greet.halo
+            let glow = RGB(hex: state == .idle ? skin.aura : style.glow), a = style.glowAlpha * 0.6 * greet.halo
             let R = hw * 2.2
             c.fill(Path(ellipseIn: CGRect(cx: px, cy: py, w: 2 * R, h: 2 * R)),
                    with: .radialGradient(Gradient(colors: [glow.color(a), glow.color(0)]),
@@ -361,7 +362,7 @@ final class Mochi {
             // Traits de plus en plus fins et opaques autour du contour : une lueur sans flou
             // (un flou recalculé 30 fois par seconde coûtait plus que tout le reste du dessin).
             for (w, a) in [(0.62, 0.07), (0.44, 0.1), (0.28, 0.14), (0.14, 0.2)] {
-                b.stroke(body, with: .color(AURA.color(a * greet.halo)), style: StrokeStyle(lineWidth: hh * w, lineJoin: .round))
+                b.stroke(body, with: .color(RGB(hex: skin.aura).color(a * greet.halo)), style: StrokeStyle(lineWidth: hh * w, lineJoin: .round))
             }
         }
         b.fill(body, with: .linearGradient(Gradient(colors: [c0.color(), c1.color()]),
@@ -413,8 +414,7 @@ final class Mochi {
             drawEye(inner, shape, x: sd * sp + lx, y: ly, er: er, side: sd, color: mini ? INK : EYE)
         }
 
-        drawPayot(b, hw: hw, hh: hh)
-        drawKippah(b, hw: hw, hh: hh)
+        drawAccessory(b, hw: hw, hh: hh)
 
         // badge
         if let badge, s.badgeS > 0.01 {
@@ -472,6 +472,89 @@ final class Mochi {
         }
     }
 
+    private func drawAccessory(_ ctx: GraphicsContext, hw: Double, hh: Double) {
+        switch skin.accessory {
+        case .none: break
+        case .kippah:
+            drawPayot(ctx, hw: hw, hh: hh)
+            drawKippah(ctx, hw: hw, hh: hh)
+        case .headphones: drawHeadphones(ctx, hw: hw, hh: hh)
+        case .crown: drawCrown(ctx, hw: hw, hh: hh)
+        case .beanie: drawBeanie(ctx, hw: hw, hh: hh)
+        case .cap: drawCap(ctx, hw: hw, hh: hh)
+        }
+    }
+
+    /// Casque audio : arceau par-dessus, deux écouteurs sur les côtés.
+    private func drawHeadphones(_ ctx: GraphicsContext, hw: Double, hh: Double) {
+        let dark = Color(hex: "#23262E"), lit = Color(hex: "#3A3F4B")
+        var band = Path()
+        band.move(to: CGPoint(x: -hw * 0.93, y: -hh * 0.05))
+        band.addCurve(to: CGPoint(x: hw * 0.93, y: -hh * 0.05), control1: CGPoint(x: -hw * 0.98, y: -hh * 1.55), control2: CGPoint(x: hw * 0.98, y: -hh * 1.55))
+        ctx.stroke(band, with: .color(dark), style: StrokeStyle(lineWidth: max(1, hh * 0.13), lineCap: .round))
+        for side in [-1.0, 1.0] {
+            let cup = Path(roundedRect: CGRect(cx: side * hw * 0.98, cy: hh * 0.08, w: hw * 0.3, h: hh * 0.62), cornerRadius: hw * 0.13)
+            ctx.fill(cup, with: .linearGradient(Gradient(colors: [lit, dark]), startPoint: CGPoint(x: 0, y: -hh * 0.25), endPoint: CGPoint(x: 0, y: hh * 0.4)))
+            if !mini {
+                ctx.fill(Path(roundedRect: CGRect(cx: side * hw * 1.04, cy: hh * 0.08, w: hw * 0.08, h: hh * 0.3), cornerRadius: hw * 0.04),
+                         with: .color(RGB(hex: skin.aura).color(0.9)))
+            }
+        }
+    }
+
+    /// Couronne dorée à cinq pointes, avec des pierres.
+    private func drawCrown(_ ctx: GraphicsContext, hw: Double, hh: Double) {
+        let w = hw * 0.62, base = -hh * 0.78, h = hh * 0.55
+        var crown = Path()
+        crown.move(to: CGPoint(x: -w, y: base))
+        let peaks: [(Double, Double)] = [(-1, 1), (-0.5, 0.55), (0, 1.12), (0.5, 0.55), (1, 1)]
+        for (i, pk) in peaks.enumerated() {
+            if i > 0 { crown.addLine(to: CGPoint(x: (peaks[i - 1].0 + pk.0) / 2 * w, y: base - h * 0.42)) }
+            crown.addLine(to: CGPoint(x: pk.0 * w, y: base - h * pk.1))
+        }
+        crown.addLine(to: CGPoint(x: w, y: base))
+        crown.addQuadCurve(to: CGPoint(x: -w, y: base), control: CGPoint(x: 0, y: base + h * 0.3))
+        crown.closeSubpath()
+        ctx.fill(crown, with: .linearGradient(Gradient(colors: [Color(hex: "#FFE680"), Color(hex: "#F2A900")]),
+                                              startPoint: CGPoint(x: 0, y: base - h), endPoint: CGPoint(x: 0, y: base)))
+        guard !mini else { return }
+        ctx.stroke(crown, with: .color(Color(hex: "#B9770E").opacity(0.7)), lineWidth: max(0.5, hh * 0.025))
+        for (x, c) in [(-0.5, "#FF4D6D"), (0.0, "#38BDF8"), (0.5, "#FF4D6D")] {
+            ctx.fill(Path(ellipseIn: CGRect(cx: x * w, cy: base - h * 0.2, w: hh * 0.11, h: hh * 0.11)), with: .color(Color(hex: c)))
+        }
+    }
+
+    /// Bonnet rouge à revers blanc et pompon.
+    private func drawBeanie(_ ctx: GraphicsContext, hw: Double, hh: Double) {
+        let w = hw * 0.9, base = -hh * 0.5
+        var hat = Path()
+        hat.move(to: CGPoint(x: -w, y: base))
+        hat.addCurve(to: CGPoint(x: w, y: base), control1: CGPoint(x: -w * 0.95, y: -hh * 1.5), control2: CGPoint(x: w * 0.95, y: -hh * 1.5))
+        hat.closeSubpath()
+        ctx.fill(hat, with: .linearGradient(Gradient(colors: [Color(hex: "#FF6B6B"), Color(hex: "#D93A4A")]),
+                                            startPoint: CGPoint(x: 0, y: -hh * 1.2), endPoint: CGPoint(x: 0, y: base)))
+        ctx.fill(Path(roundedRect: CGRect(cx: 0, cy: base, w: w * 2.06, h: hh * 0.24), cornerRadius: hh * 0.12), with: .color(Color(hex: "#F4F7FB")))
+        ctx.fill(Path(ellipseIn: CGRect(cx: 0, cy: -hh * 1.22, w: hh * 0.32, h: hh * 0.32)), with: .color(Color(hex: "#FFFFFF")))
+    }
+
+    /// Casquette sombre, visière vers la droite.
+    private func drawCap(_ ctx: GraphicsContext, hw: Double, hh: Double) {
+        let w = hw * 0.78, base = -hh * 0.62
+        var visor = Path()
+        visor.move(to: CGPoint(x: w * 0.2, y: base))
+        visor.addQuadCurve(to: CGPoint(x: w * 1.55, y: base + hh * 0.06), control: CGPoint(x: w * 1.2, y: base - hh * 0.2))
+        visor.addQuadCurve(to: CGPoint(x: w * 0.2, y: base + hh * 0.1), control: CGPoint(x: w, y: base + hh * 0.14))
+        visor.closeSubpath()
+        ctx.fill(visor, with: .color(Color(hex: "#151A26")))
+        var dome = Path()
+        dome.move(to: CGPoint(x: -w, y: base))
+        dome.addCurve(to: CGPoint(x: w, y: base), control1: CGPoint(x: -w * 0.95, y: -hh * 1.45), control2: CGPoint(x: w * 0.95, y: -hh * 1.45))
+        dome.closeSubpath()
+        ctx.fill(dome, with: .linearGradient(Gradient(colors: [Color(hex: "#2E3A55"), Color(hex: "#1B2235")]),
+                                             startPoint: CGPoint(x: 0, y: -hh * 1.2), endPoint: CGPoint(x: 0, y: base)))
+        if !mini { ctx.fill(Path(ellipseIn: CGRect(cx: 0, cy: -hh * 1.12, w: hh * 0.12, h: hh * 0.12)), with: .color(Color(hex: "#2E3A55"))) }
+    }
+
     /// Papillotes : deux boucles sombres qui ondulent le long des côtés (pas sur les mini, trop fines).
     private func drawPayot(_ ctx: GraphicsContext, hw: Double, hh: Double) {
         guard !mini else { return }
@@ -513,7 +596,7 @@ final class Mochi {
 
     /// Haut et bas du corps : le galet néon, ou la couleur de la session pour les mini.
     private var palette: (RGB, RGB) {
-        guard let c = bodyColor else { return (TOP, BOTTOM) }
+        guard let c = bodyColor else { return (RGB(hex: skin.top), RGB(hex: skin.bottom)) }
         return (c.mix(RGB(255, 255, 255), 0.3), c.mix(RGB(0, 0, 0), 0.12))
     }
 

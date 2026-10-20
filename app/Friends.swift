@@ -17,11 +17,15 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         let mochi: Mochi
         var online: Bool { Date().timeIntervalSince(seen) < 70 * 60 }  // un signe de vie toutes les 30 min
 
-        init(id: String, name: String, state: BotState, sessions: Int, seen: Date) {
+        init(id: String, name: String, state: BotState, sessions: Int, seen: Date, skin: String?) {
             self.id = id; self.name = name; self.state = state; self.sessions = sessions; self.seen = seen
-            let colors = ["#FF8BC4", "#38BDF8", "#34D399", "#F7B32B", "#A78BFA", "#F472B6", "#2DD4A7"]
-            let pick = id.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0xFFFF } % colors.count
-            mochi = Mochi(bodyColor: colors[pick], now: CACurrentMediaTime())
+            if let skin {  // son skin, avec ses couleurs
+                mochi = Mochi(skin: Skin.named(skin), now: CACurrentMediaTime())
+            } else {  // version sans skins : une couleur tirée de son identifiant
+                let colors = ["#FF8BC4", "#38BDF8", "#34D399", "#F7B32B", "#A78BFA", "#F472B6", "#2DD4A7"]
+                let pick = id.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0xFFFF } % colors.count
+                mochi = Mochi(bodyColor: colors[pick], skin: Skin.named("galet"), now: CACurrentMediaTime())
+            }
             mochi.setState(state, force: true)
         }
     }
@@ -102,8 +106,11 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
     private func publish(force: Bool) {
         guard configured, force || sent?.state != current.state.rawValue else { return }
         sent = (current.state.rawValue, Date())
-        post(["kind": "status", "state": current.state.rawValue, "sessions": current.sessions])
+        post(["kind": "status", "state": current.state.rawValue, "sessions": current.sessions, "skin": Skin.current.id])
     }
+
+    /// Nouveau skin : les potes le voient tout de suite.
+    func skinChanged() { publish(force: true) }
 
     /// Un cœur (« heart ») ou un coucou (« wave ») au bonhomme d'un pote.
     func poke(_ f: Friend, _ emote: String) {
@@ -178,14 +185,15 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         switch m["kind"] as? String {
         case "status":
             let state = BotState(rawValue: m["state"] as? String ?? "") ?? .idle
-            let sessions = m["sessions"] as? Int ?? 0
+            let sessions = m["sessions"] as? Int ?? 0, skin = m["skin"] as? String
             if let f = list.first(where: { $0.id == id }) {
                 f.name = who
+                if let skin, skin != f.mochi.skin.id, f.mochi.bodyColor == nil { f.mochi.skin = Skin.named(skin) }
                 f.sessions = sessions
                 f.seen = at
                 if f.state != state { f.state = state; f.mochi.setState(state) }
             } else {
-                list.append(Friend(id: id, name: who, state: state, sessions: sessions, seen: at))
+                list.append(Friend(id: id, name: who, state: state, sessions: sessions, seen: at, skin: skin))
             }
             list.sort { ($0.online ? 0 : 1, $0.name) < ($1.online ? 0 : 1, $1.name) }
             objectWillChange.send()

@@ -226,6 +226,13 @@ struct SettingsMenu: View {
         }
         Text("⌥Espace : écrire à Claude · ⌥⇧Espace : lui dicter")
         Divider()
+        Menu("Skin") {
+            ForEach(Skin.all) { s in
+                Button { store.setSkin(s) } label: {
+                    if s.id == store.mochi.skin.id { Label(s.name, systemImage: "checkmark") } else { Text(s.name) }
+                }
+            }
+        }
         Button("Réglages…") { SettingsWindow.show() }
         Button("Quitter Encoche") { NSApp.terminate(nil) }
     }

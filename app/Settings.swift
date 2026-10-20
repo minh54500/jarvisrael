@@ -9,7 +9,7 @@ enum SettingsWindow {
 
     static func show() {
         if window == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 640),
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 700),
                              styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
             w.title = "Réglages d'Encoche"
             w.isReleasedWhenClosed = false
@@ -19,6 +19,23 @@ enum SettingsWindow {
         }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+    }
+}
+
+/// Le bonhomme dans un skin donné, immobile (aperçu des Réglages).
+private struct SkinPreview: View {
+    let skin: Skin
+    @State private var mochi: Mochi?
+
+    var body: some View {
+        Canvas { ctx, size in
+            mochi?.draw(ctx, cx: size.width / 2, cy: size.height / 2 + 5, hb: 40)
+        }
+        .onAppear {
+            let m = Mochi(skin: skin, now: CACurrentMediaTime())
+            m.update(CACurrentMediaTime() + 0.016)
+            mochi = m
+        }
     }
 }
 
@@ -42,6 +59,29 @@ private struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section("Skin du bonhomme") {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
+                    ForEach(Skin.all) { s in
+                        let on = s.id == store.mochi.skin.id
+                        Button { store.setSkin(s) } label: {
+                            VStack(spacing: 4) {
+                                SkinPreview(skin: s).frame(width: 96, height: 70)
+                                Text(s.name).font(.callout.weight(on ? .semibold : .regular))
+                            }
+                            .padding(.vertical, 6)
+                            .frame(maxWidth: .infinity)
+                            .background(RoundedRectangle(cornerRadius: 10).fill(Color.black))
+                            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(on ? Color.accentColor : .clear, lineWidth: 2))
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Skin \(s.name)")
+                        .accessibilityAddTraits(on ? .isSelected : [])
+                    }
+                }
+                Text("Tes potes voient ton skin dans leur onglet Potes.").font(.caption).foregroundStyle(.secondary)
+            }
+
             Section("Raccourcis") {
                 Picker("Écrire à Claude", selection: $summon) {
                     ForEach(HotKey.Summon.allCases) { Text($0.label).tag($0) }
@@ -132,7 +172,7 @@ private struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 500, height: 640)
+        .frame(width: 500, height: 700)
         .onChange(of: store.favorites) { _, v in UserDefaults.standard.set(v, forKey: "favorites") }
     }
 }
