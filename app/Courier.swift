@@ -76,9 +76,8 @@ enum Courier {
         guard let field = found else {
             return .failed("Je ne trouve pas le champ de Claude. Si VS Code demande d'ouvrir le lien, accepte (« ne plus demander »), puis renvoie.")
         }
-        guard normalized(string(field, kAXValueAttribute)).isEmpty else {
-            return .failed("Il y a déjà un brouillon dans Claude : envoie-le ou efface-le d'abord.")
-        }
+        // (Un champ vide renvoie son texte d'invite, « Queue another message… » : on ne peut pas
+        // savoir avant de coller s'il y a un brouillon. On le vérifie juste après, voir plus bas.)
         AXUIElementSetAttributeValue(field, kAXFocusedAttribute as CFString, kCFBooleanTrue)
         guard wait(1, { (attribute(field, kAXFocusedAttribute) as? Bool) == true }) else {
             return .failed("Le champ de Claude n'a pas pris le focus.")
@@ -91,8 +90,17 @@ enum Courier {
             DispatchQueue.main.sync { Clipboard.restore(saved) }
         }
         press(app.processIdentifier, 9, .maskCommand)  // ⌘V
-        guard wait(1.5, { normalized(string(field, kAXValueAttribute)) == normalized(text) }) else {
+        let mine = normalized(text)
+        guard wait(1.5, { normalized(string(field, kAXValueAttribute)).contains(mine) }) else {
             return .failed("Le texte n'est pas arrivé dans Claude : rien n'a été envoyé.")
+        }
+        // Le champ doit contenir exactement notre message. Sinon, il y avait un brouillon :
+        // on annule le collage et on n'envoie rien.
+        if normalized(string(field, kAXValueAttribute)) != mine {
+            press(app.processIdentifier, 6, .maskCommand)  // ⌘Z
+            let undone = wait(1, { !normalized(string(field, kAXValueAttribute)).contains(mine) })
+            return .failed(undone ? "Il y a déjà un brouillon dans Claude : rien n'a été envoyé."
+                                  : "Il y avait un brouillon dans Claude : ton message a été ajouté à la suite, rien n'a été envoyé.")
         }
         if let button = sendButton(near: field), (attribute(button, kAXEnabledAttribute) as? Bool) ?? false {
             AXUIElementPerformAction(button, kAXPressAction as CFString)
