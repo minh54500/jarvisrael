@@ -15,6 +15,23 @@ struct Session: Identifiable {
     var entrypoint = ""  // "claude-vscode" : session de l'extension VS Code (onglet Claude Code)
     var message = ""
     var model = ""  // "claude-opus-5-5"… annoncé par Claude Code au démarrage de la session
+    var turnStart: Date?    // début de la demande en cours
+    var touched: [String] = []  // fichiers modifiés pendant cette demande
+    var turn: Turn?         // bilan de la dernière demande terminée
+}
+
+/// Ce que Claude a fait pendant une demande : fichiers modifiés, durée, lignes (git).
+struct Turn {
+    var files: [String]
+    var seconds: Double
+    var added: Int?
+    var removed: Int?
+
+    var text: String {
+        let d = seconds < 60 ? "\(max(1, Int(seconds))) s" : "\(Int((seconds / 60).rounded())) min"
+        if files.isEmpty { return "en \(d)" }
+        return "\(files.count) fichier\(files.count > 1 ? "s" : "") en \(d)"
+    }
 }
 
 /// Modèles proposés dans l'encoche. `arg` est ce qu'on passe à `/model`.
@@ -55,7 +72,7 @@ struct Permission: Identifiable {
 }
 
 enum Mode { case hidden, compact, expanded }
-enum Panel: Equatable { case greeting, overview, empty, approval, finished, error, upload, choose, converting, result, shelf, music }
+enum Panel: Equatable { case greeting, overview, empty, approval, finished, error, upload, choose, converting, result, shelf, music, dev, care }
 
 private let PALETTE = ["#FF6B5B", "#2DD4A7", "#F7B32B", "#A78BFA", "#38BDF8", "#F472B6"]
 
@@ -124,10 +141,13 @@ final class Store: ObservableObject {
     var viewHeight: Double {
         let base: Double = switch view {
         case .greeting: 150
-        case .overview: 196
+        case .overview: 226
         case .empty: 150
         case .approval: 206
-        case .finished, .error, .choose: 176
+        case .finished: (focused?.turn?.files.isEmpty ?? true) ? 176 : 206
+        case .error, .choose: 176
+        case .dev: 206
+        case .care: 164
         case .upload, .shelf, .music: 176
         case .converting, .result: 150
         }
@@ -185,7 +205,7 @@ final class Store: ObservableObject {
     }
 
     private var pinned: Bool {
-        if composing || sending || menuOpen { return true }
+        if composing || sending || menuOpen || Voice.shared.listening { return true }
         if !permissions.isEmpty && mode == .expanded && view == .approval { return true }
         if view == .choose || view == .converting || fileDragging { return true }
         if let pinUntil, Date() < pinUntil { return true }
@@ -198,7 +218,7 @@ final class Store: ObservableObject {
         return shelf.isEmpty ? .empty : .shelf
     }
 
-    /// Onglets du bandeau : Claude, Musique, Étagère.
+    /// Onglets du bandeau : Claude, Musique, Étagère, Dev.
     func goTo(_ p: Panel) {
         guard view != p else { return }
         Sound.shared.play("tick")
@@ -239,6 +259,7 @@ final class Store: ObservableObject {
     func collapse() {
         let was = mode
         pinUntil = nil
+        wantsFocus = false
         if composing { setComposing(false) }
         let target: Mode = sessions.isEmpty ? .hidden : .compact
         guard mode != target else { return }
@@ -404,6 +425,7 @@ final class Store: ObservableObject {
 
     /// Entrée : le message part dans la session choisie (voir Courier).
     func submitDraft() {
+        Voice.shared.stop()
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, let s = focused else { return }
         deliver(text, to: s) { copied in
@@ -421,6 +443,147 @@ final class Store: ObservableObject {
             self.say("\(s.name) passe à \(m.name) ✓", ok: true)
         }
     }
+
+    // MARK: Raccourci, favoris, capture, dictée
+
+    /// Le champ d'écriture doit prendre le clavier dès qu'il est affiché (raccourci, capture).
+    @Published var wantsFocus = false
+
+    /// ⌥Espace : l'encoche s'ouvre prête à écrire à la session choisie (⌥⇧Espace : en dictant).
+    /// Un deuxième appui la referme.
+    func summon(dictate: Bool) {
+        if mode == .expanded && (composing || Voice.shared.listening) {
+            Voice.shared.stop()
+            if composing { setComposing(false) } else { collapse() }
+            return
+        }
+        lastActivity = Date()
+        guard !sessions.isEmpty else {
+            show(defaultView)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                if !self.hovering && !self.pinned { self.collapse() }
+            }
+            return
+        }
+        show(.overview)
+        wantsFocus = true
+        if dictate { toggleDictation() }
+    }
+
+    /// Prompts favoris : un clic les envoie à la session choisie.
+    @Published var favorites: [String] = UserDefaults.standard.stringArray(forKey: "favorites")
+        ?? ["Continue", "Corrige les erreurs", "Lance les tests", "Fais le commit"]
+
+    func sendFavorite(_ text: String) {
+        guard let s = focused else { return }
+        deliver(text, to: s) { copied in
+            if !copied { self.say("« \(text) » envoyé ✓", ok: true) }
+        }
+    }
+
+    /// « + » : le message en cours d'écriture devient un favori.
+    func addFavorite() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return say("Écris un message, puis + pour le garder en favori.", ok: true) }
+        if !favorites.contains(text) { favorites.append(text) }
+        UserDefaults.standard.set(favorites, forKey: "favorites")
+        Sound.shared.play("pop")
+        say("Ajouté aux favoris ✓", ok: true)
+    }
+
+    func removeFavorite(_ text: String) {
+        favorites.removeAll { $0 == text }
+        UserDefaults.standard.set(favorites, forKey: "favorites")
+        Sound.shared.play("blip")
+    }
+
+    /// Capture d'une zone de l'écran : gardée dans l'étagère, et son chemin ajouté au message
+    /// pour que Claude la regarde.
+    func capture() {
+        let dir = Bridge.folder.appendingPathComponent("Captures")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd-HHmmss"
+        let url = dir.appendingPathComponent("capture-\(f.string(from: Date())).png")
+        Voice.shared.stop()
+        if composing { setComposing(false) }
+        collapse()  // l'encoche s'efface pendant qu'on sélectionne
+        DispatchQueue.global().async {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+            p.arguments = ["-i", "-x", url.path]
+            try? p.run()
+            p.waitUntilExit()
+            DispatchQueue.main.async { MainActor.assumeIsolated { Store.shared.captured(url) } }
+        }
+    }
+
+    private func captured(_ url: URL) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }  // Échap : annulée
+        if !shelf.contains(url) { shelf.append(url) }
+        saveShelf()
+        Sound.shared.play("pop")
+        mochi.emote(.happy, 0.8)
+        guard focused != nil else {
+            show(.shelf, sound: nil)
+            return say("Capture gardée dans l'étagère ✓", ok: true)
+        }
+        let tag = "Capture : \"\(url.path)\""
+        let base = draft.trimmingCharacters(in: .whitespaces)
+        draft = base.isEmpty ? tag + " " : base + " " + tag + " "
+        show(.overview, sound: nil)
+        wantsFocus = true
+    }
+
+    /// Dictée : ce qui est dit s'ajoute au message en cours.
+    func toggleDictation() {
+        if Voice.shared.listening { return Voice.shared.stop() }
+        let base = draft.trimmingCharacters(in: .whitespaces)
+        mochi.emote(.surprised, 0.6)
+        Sound.shared.play("peek")
+        Voice.shared.start(text: { words in
+            self.draft = base.isEmpty ? words : base + " " + words
+        }, failed: { why in
+            Sound.shared.play("error")
+            self.say(why, ok: false, for: 5)
+        })
+    }
+
+    // MARK: Rappels du bonhomme
+
+    @Published var reminder: Reminder?
+
+    /// Un rappel (pause, eau, nuit, batterie, chaleur). Refusé (false) si on est occupé :
+    /// il reviendra au prochain passage.
+    func remind(_ r: Reminder) -> Bool {
+        let busyView: [Panel] = [.approval, .choose, .converting, .upload]
+        guard permissions.isEmpty, !composing, !sending, !fileDragging, !Voice.shared.listening,
+              !(mode == .expanded && (hovering || busyView.contains(view))) else { return false }
+        reminder = r
+        switch r {
+        case .pause, .night: mochi.emote(.yawn, 2.4)
+        case .water: mochi.emote(.happy, 1.5)
+        case .battery: mochi.emote(.surprised, 1.2)
+        case .heat: mochi.emote(.worried, 2.5)
+        }
+        show(.care, sound: nil)
+        Sound.shared.play("question")
+        pinUntil = Date().addingTimeInterval(9)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 9.2) {
+            if self.view == .care && !self.hovering { self.collapse() }
+        }
+        return true
+    }
+
+    /// Réponse au rappel : « Plus tard » le fait revenir dans 10 minutes.
+    func answerReminder(later: Bool) {
+        if later { Care.shared.snooze() } else { mochi.emote(.happy, 0.9) }
+        Sound.shared.play(later ? "blip" : "approve")
+        collapse()
+    }
+
+    /// Étagère : fichiers gardés, ou historique du presse-papiers.
+    @Published var shelfShowsClips = false
 
     /// Un menu de l'encoche est ouvert : elle reste ouverte même si la souris en sort.
     @Published var menuOpen = false
@@ -513,6 +676,9 @@ final class Store: ObservableObject {
             s.line = "Session ouverte"
         case "UserPromptSubmit":
             s.state = .working
+            s.turnStart = Date()
+            s.touched = []
+            s.turn = nil
             s.line = "« \(short(ev["prompt"] as? String ?? "", 70)) »"
             push(&s)
         case "PreToolUse":
@@ -525,6 +691,11 @@ final class Store: ObservableObject {
             permissions.removeAll { $0.session == sid }
             s.state = .working
             if event == "PostToolUseFailure" { s.line = "✗ " + s.line }
+            let input = ev["tool_input"] as? [String: Any] ?? [:]
+            if event == "PostToolUse", ["Edit", "MultiEdit", "Write", "NotebookEdit"].contains(ev["tool_name"] as? String ?? ""),
+               let path = (input["file_path"] as? String) ?? (input["notebook_path"] as? String), !s.touched.contains(path) {
+                s.touched.append(path)
+            }
             if view == .approval && permissions.isEmpty && mode == .expanded { collapseSoon() }
         case "PermissionRequest":
             guard let responder else { break }
@@ -548,6 +719,13 @@ final class Store: ObservableObject {
         case "Stop":
             s.state = .finished
             s.line = "Terminé"
+            if let start = s.turnStart {
+                let turn = Turn(files: s.touched, seconds: Date().timeIntervalSince(start))
+                s.turn = turn
+                s.turnStart = nil
+                s.line = "Terminé : " + turn.text
+                if !turn.files.isEmpty { countLines(sid, cwd: s.cwd, files: turn.files) }
+            }
             if draft.isEmpty && !sending { focus = sid }  // pas de changement de destinataire en pleine écriture
             store(s)
             if permissions.isEmpty && view != .choose && view != .converting {
@@ -573,6 +751,44 @@ final class Store: ObservableObject {
         store(s)
         refreshMochi()
         if mode == .hidden && !sessions.isEmpty { withAnimation(Self.openAnimation) { mode = .compact } }
+    }
+
+    /// Lignes ajoutées / retirées (git, depuis le dernier commit) dans les fichiers de la demande.
+    private func countLines(_ sid: String, cwd: String, files: [String]) {
+        DispatchQueue.global().async {
+            func git(_ args: [String]) -> String? {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+                p.arguments = ["-C", cwd] + args
+                let out = Pipe()
+                p.standardOutput = out
+                p.standardError = FileHandle.nullDevice
+                do { try p.run() } catch { return nil }
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                p.waitUntilExit()
+                return p.terminationStatus == 0 ? String(decoding: data, as: UTF8.self) : nil
+            }
+            guard let stat = git(["diff", "--numstat", "HEAD", "--"] + files) else { return }
+            var added = 0, removed = 0
+            for line in stat.split(separator: "\n") {
+                let cols = line.split(separator: "\t")
+                if cols.count >= 2 { added += Int(cols[0]) ?? 0; removed += Int(cols[1]) ?? 0 }
+            }
+            // Fichiers nouveaux (pas encore suivis par git) : toutes leurs lignes sont ajoutées.
+            for rel in (git(["ls-files", "--others", "--exclude-standard", "--"] + files) ?? "").split(separator: "\n") {
+                let url = URL(fileURLWithPath: cwd).appendingPathComponent(String(rel))
+                if let text = try? String(contentsOf: url, encoding: .utf8) { added += text.split(separator: "\n", omittingEmptySubsequences: false).count }
+            }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let store = Store.shared
+                    guard var s = store.session(sid), s.turn != nil else { return }
+                    s.turn?.added = added
+                    s.turn?.removed = removed
+                    store.store(s)
+                }
+            }
+        }
     }
 
     private func newSession(_ id: String, _ cwd: String) -> Session {

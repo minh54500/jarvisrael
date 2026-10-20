@@ -33,6 +33,8 @@ cat > $APP/Contents/Info.plist <<EOF
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>Encoche t'écoute quand tu dictes un message à Claude.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>Encoche transforme ta voix en texte pour écrire à Claude.</string>
   <key>NSAppleEventsUsageDescription</key><string>Encoche pilote Spotify depuis l'encoche : lecture, pause, morceau suivant.</string>
 </dict></plist>
 EOF

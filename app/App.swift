@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import SwiftUI
 
 @main
@@ -106,6 +107,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+
+        // ⌥Espace : écrire à Claude ; ⌥⇧Espace : lui dicter.
+        HotKey.register(id: 1, key: kVK_Space, modifiers: optionKey) { MainActor.assumeIsolated { Store.shared.summon(dictate: false) } }
+        HotKey.register(id: 2, key: kVK_Space, modifiers: optionKey | shiftKey) { MainActor.assumeIsolated { Store.shared.summon(dictate: true) } }
+        _ = ClipHistory.shared  // l'historique du presse-papiers commence maintenant
+        Care.shared.start()
 
         // Menu ouvert (modèle, réglages) : l'encoche ne se referme pas sous lui.
         for (name, on) in [(NSMenu.didBeginTrackingNotification, true), (NSMenu.didEndTrackingNotification, false)] {

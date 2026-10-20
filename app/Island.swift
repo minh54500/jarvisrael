@@ -201,6 +201,12 @@ struct SettingsMenu: View {
             store.setLoginItem(!store.openAtLogin)
         }
         Divider()
+        Button(Care.shared.enabled ? "Couper les rappels (pause, eau, nuit)" : "Activer les rappels (pause, eau, nuit)") {
+            Care.shared.enabled.toggle()
+            store.objectWillChange.send()
+        }
+        Text("⌥Espace : écrire à Claude · ⌥⇧Espace : lui dicter")
+        Divider()
         Button("Quitter Encoche") { NSApp.terminate(nil) }
     }
 }
@@ -230,6 +236,8 @@ struct IslandContent: View {
                 case .result: ResultPanel(store: store)
                 case .shelf: ShelfPanel(store: store)
                 case .music: MusicPanel(store: store)
+                case .dev: DevPanel(store: store)
+                case .care: CarePanel(store: store)
                 }
             }
             .id(store.view)
@@ -286,12 +294,13 @@ private struct Tabs: View {
     @ObservedObject var spotify = Spotify.shared
     @Namespace private var ns
 
-    private enum Tab { case claude, music, shelf }
+    private enum Tab { case claude, music, shelf, dev }
 
     private var current: Tab {
         switch store.view {
         case .music: .music
         case .shelf: .shelf
+        case .dev: .dev
         default: .claude
         }
     }
@@ -305,6 +314,7 @@ private struct Tabs: View {
             }
             item(.shelf, icon: store.shelf.isEmpty ? "tray" : "tray.full.fill", title: "Étagère",
                  badge: store.shelf.isEmpty ? nil : "\(store.shelf.count)", live: false) { store.goTo(.shelf) }
+            item(.dev, icon: "terminal", title: "Dev", badge: nil, live: false) { store.goTo(.dev) }
         }
         .animation(.spring(response: 0.34, dampingFraction: 0.8), value: current)
     }
@@ -528,6 +538,7 @@ private struct OverviewPanel: View {
                         .transition(.opacity)
                     }
                     Spacer(minLength: 0)
+                    FavoritesRow(store: store)
                     ComposeBar(store: store)
                 }
                 .animation(.easeOut(duration: 0.2), value: store.notice?.text)
@@ -641,17 +652,105 @@ private struct SessionRow: View {
     }
 }
 
+/// Prompts favoris : un clic les envoie ; « + » garde le message en cours ; clic droit pour retirer.
+private struct FavoritesRow: View {
+    @ObservedObject var store: Store
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 5) {
+                ForEach(store.favorites, id: \.self) { text in
+                    Button(text) { store.sendFavorite(text) }
+                        .buttonStyle(Chip())
+                        .disabled(store.sending || store.focused == nil)
+                        .help("Envoyer « \(text) » à Claude")
+                        .contextMenu { Button("Retirer des favoris") { store.removeFavorite(text) } }
+                }
+                Button { store.addFavorite() } label: { Image(systemName: "plus").font(.system(size: 9.5, weight: .bold)) }
+                    .buttonStyle(Chip())
+                    .help("Garder le message en cours comme favori")
+                    .accessibilityLabel("Ajouter le message aux favoris")
+            }
+        }
+        .frame(height: 22)
+    }
+}
+
+/// Petite pastille de texte (favoris, fichiers modifiés).
+private struct Chip: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { ChipBody(configuration: configuration) }
+}
+
+private struct ChipBody: View {
+    let configuration: ButtonStyleConfiguration
+    @State private var hover = false
+    @Environment(\.isEnabled) private var enabled
+
+    var body: some View {
+        configuration.label
+            .font(Fonts.caption.weight(.medium))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .foregroundStyle(hover ? Color.ink : Color.soft)
+            .padding(.horizontal, 9)
+            .frame(height: 22)
+            .background(Capsule().fill(.white.opacity(configuration.isPressed ? 0.18 : hover ? 0.12 : 0.06)))
+            .overlay(Capsule().strokeBorder(.white.opacity(0.05)))
+            .contentShape(Capsule())
+            .opacity(enabled ? 1 : 0.45)
+            .scaleEffect(configuration.isPressed ? 0.95 : 1)
+            .onHover { hover = $0 }
+            .animation(.easeOut(duration: 0.12), value: hover)
+    }
+}
+
+/// Bouton-icône du champ d'écriture (capture, micro).
+private struct MiniIcon: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { MiniIconBody(configuration: configuration) }
+}
+
+private struct MiniIconBody: View {
+    let configuration: ButtonStyleConfiguration
+    @State private var hover = false
+
+    var body: some View {
+        configuration.label
+            .foregroundStyle(hover ? Color.ink : Color.muted)
+            .frame(width: 22, height: 22)
+            .background(Circle().fill(.white.opacity(configuration.isPressed ? 0.16 : hover ? 0.1 : 0)))
+            .contentShape(Circle())
+            .onHover { hover = $0 }
+    }
+}
+
 /// Champ « Écris à Claude… » et bouton d'envoi, en bas de la section de gauche.
 private struct ComposeBar: View {
     @ObservedObject var store: Store
+    @ObservedObject var voice = Voice.shared
     var body: some View {
         let empty = store.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         HStack(spacing: 6) {
             ComposeField(text: $store.draft,
-                         placeholder: store.focused.map { "Écris à Claude (\($0.name))…" } ?? "Écris à Claude…",
+                         placeholder: voice.listening ? "Je t'écoute…"
+                             : store.focused.map { "Écris à Claude (\($0.name))…" } ?? "Écris à Claude…",
                          onSubmit: { store.submitDraft() },
-                         onEditing: { store.setComposing($0) })
+                         onEditing: { store.setComposing($0) },
+                         focus: store.wantsFocus,
+                         onFocused: { store.wantsFocus = false })
                 .frame(height: 18)
+            Button { store.capture() } label: { Image(systemName: "viewfinder").font(.system(size: 11.5, weight: .semibold)) }
+                .buttonStyle(MiniIcon())
+                .help("Capturer une zone de l'écran et la montrer à Claude")
+                .accessibilityLabel("Capture d'écran pour Claude")
+            Button { store.toggleDictation() } label: {
+                Image(systemName: voice.listening ? "waveform" : "mic.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .symbolEffect(.variableColor.iterative, isActive: voice.listening)
+                    .foregroundStyle(voice.listening ? Color.danger : Color.muted)
+            }
+            .buttonStyle(MiniIcon())
+            .help(voice.listening ? "Arrêter la dictée" : "Dicter le message (⌥⇧Espace)")
+            .accessibilityLabel(voice.listening ? "Arrêter la dictée" : "Dicter le message")
             Button { store.submitDraft() } label: {
                 Group {
                     if store.sending { ProgressView().controlSize(.mini).tint(Color.onLight) }
@@ -671,37 +770,60 @@ private struct ComposeBar: View {
         .padding(.trailing, 5)
         .padding(.vertical, 5)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.white.opacity(store.composing ? 0.11 : 0.07)))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(.white.opacity(store.composing ? 0.16 : 0.04)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .stroke(voice.listening ? Color.danger.opacity(0.5) : .white.opacity(store.composing ? 0.16 : 0.04)))
         .animation(.easeOut(duration: 0.15), value: store.composing)
     }
 }
 
-/// Étagère : les fichiers gardés. Glisser = déposer ailleurs ; clic = copier (à coller avec ⌘V).
+/// Étagère : les fichiers gardés (glisser = déposer ailleurs, clic = copier) ou l'historique
+/// du presse-papiers (clic = recopier).
 private struct ShelfPanel: View {
     @ObservedObject var store: Store
+    @ObservedObject var clipboard = ClipHistory.shared
+
     var body: some View {
+        let clips = store.shelfShowsClips
         Card(wash: Color(hex: "#3B9EFF", 0.22)) {
             VStack(alignment: .leading, spacing: 8) {
-                HStack {
+                HStack(spacing: 8) {
+                    Segments(left: "Fichiers \(store.shelf.count)", right: "Copies \(clipboard.clips.count)", rightOn: clips) {
+                        store.shelfShowsClips = $0
+                        Sound.shared.play("tick")
+                    }
                     if let notice = store.notice {
-                        Text(notice.text).font(.system(size: 12, weight: .medium))
+                        Text(notice.text).font(Fonts.label.weight(.medium))
                             .foregroundStyle(notice.ok ? Color.success : Color.danger).lineLimit(1)
                     } else {
-                        Text(store.shelf.isEmpty ? "Glisse un fichier sur l'encoche pour le garder ici."
-                                                 : "Glisse-les où tu veux, ou clique pour copier.")
-                            .font(.system(size: 12)).foregroundStyle(Color.muted).lineLimit(1)
+                        Text(clips ? (clipboard.clips.isEmpty ? "Ce que tu copies s'affiche ici." : "Clique pour recopier.")
+                                   : (store.shelf.isEmpty ? "Glisse un fichier sur l'encoche." : "Glisse ou clique pour copier."))
+                            .font(Fonts.label).foregroundStyle(Color.muted).lineLimit(1)
                     }
                     Spacer()
-                    if !store.shelf.isEmpty {
-                        Button("Vider") { store.clearShelf() }.buttonStyle(Pill())
+                    if !clips {
+                        Button { store.capture() } label: { Image(systemName: "viewfinder").font(.system(size: 11.5, weight: .semibold)) }
+                            .buttonStyle(IconButton())
+                            .help("Capturer une zone de l'écran")
+                            .accessibilityLabel("Capture d'écran")
+                    }
+                    if clips ? !clipboard.clips.isEmpty : !store.shelf.isEmpty {
+                        Button("Vider") { clips ? clipboard.clear() : store.clearShelf() }.buttonStyle(Pill())
                     }
                 }
-                HStack(spacing: 6) {
-                    // Les plus récents d'abord ; au-delà de 6, on l'indique.
-                    ForEach(store.shelf.suffix(6).reversed(), id: \.self) { url in ShelfItem(store: store, url: url) }
-                    if store.shelf.count > 6 {
-                        Text("+\(store.shelf.count - 6)").font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Color.muted).padding(.leading, 4)
+                if clips {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(clipboard.clips) { c in ClipItem(store: store, clip: c) }
+                        }
+                    }
+                } else {
+                    HStack(spacing: 6) {
+                        // Les plus récents d'abord ; au-delà de 6, on l'indique.
+                        ForEach(store.shelf.suffix(6).reversed(), id: \.self) { url in ShelfItem(store: store, url: url) }
+                        if store.shelf.count > 6 {
+                            Text("+\(store.shelf.count - 6)").font(Fonts.labelBold)
+                                .foregroundStyle(Color.muted).padding(.leading, 4)
+                        }
                     }
                 }
             }
@@ -709,6 +831,83 @@ private struct ShelfPanel: View {
             .padding(.trailing, 12)
             .padding(.vertical, 12)
         }
+    }
+}
+
+/// Deux choix côte à côte, la pastille claire sur celui qui est actif.
+private struct Segments: View {
+    let left: String
+    let right: String
+    let rightOn: Bool
+    let pick: (Bool) -> Void
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach([false, true], id: \.self) { isRight in
+                let on = isRight == rightOn
+                Button { if !on { pick(isRight) } } label: {
+                    Text(isRight ? right : left)
+                        .font(Fonts.caption.weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(on ? Color.ink : Color.muted)
+                        .padding(.horizontal, 9)
+                        .frame(height: 22)
+                        .background(Capsule().fill(.white.opacity(on ? 0.14 : 0)))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .background(Capsule().fill(.white.opacity(0.05)))
+        .animation(.easeOut(duration: 0.15), value: rightOn)
+    }
+}
+
+/// Un élément copié : texte (3 lignes) ou image. Clic = recopier ; glisser = déposer ailleurs.
+private struct ClipItem: View {
+    @ObservedObject var store: Store
+    let clip: ClipHistory.Clip
+    @State private var hover = false
+
+    var body: some View {
+        Group {
+            if let img = clip.image {
+                Image(nsImage: img).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
+                    .frame(width: 120, height: 66).clipped()
+            } else {
+                Text(clip.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Color.soft)
+                    .lineLimit(4)
+                    .frame(width: 108, height: 58, alignment: .topLeading)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: Radius.item, style: .continuous).fill(.white.opacity(hover ? 0.1 : 0.04)))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.item, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Radius.item, style: .continuous).strokeBorder(.white.opacity(hover ? 0.12 : 0.05)))
+        .contentShape(Rectangle())
+        .onHover { hover = $0 }
+        .onTapGesture {
+            ClipHistory.shared.copy(clip)
+            Sound.shared.play("pop")
+            store.say("Copié ✓ colle-le où tu veux (⌘V)", ok: true)
+        }
+        .onDrag {
+            store.startDragOut()
+            if let t = clip.text { return NSItemProvider(object: t as NSString) }
+            return clip.image.map { NSItemProvider(object: $0) } ?? NSItemProvider()
+        }
+        .contextMenu {
+            Button("Copier") { ClipHistory.shared.copy(clip) }
+            Button("Retirer") { ClipHistory.shared.remove(clip) }
+            Divider()
+            Button("Tout effacer") { ClipHistory.shared.clear() }
+        }
+        .help(clip.text.map { String($0.prefix(400)) } ?? "Image copiée")
     }
 }
 
@@ -905,6 +1104,189 @@ private struct RoundBody: View {
     }
 }
 
+/// Onglet Dev : serveurs locaux à gauche, santé du Mac à droite.
+private struct DevPanel: View {
+    @ObservedObject var store: Store
+    @ObservedObject var dev = DevMonitor.shared
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Card {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Serveurs de dev").font(Fonts.labelBold).foregroundStyle(Color.muted)
+                    if dev.servers.isEmpty {
+                        Spacer(minLength: 0)
+                        Text(dev.scanned ? "Aucun serveur ne tourne." : "Je regarde…").font(Fonts.lead)
+                        Text("Lance npm run dev (ou autre) : il apparaîtra ici.").font(Fonts.label).foregroundStyle(Color.muted)
+                        Spacer(minLength: 0)
+                    } else {
+                        ScrollView(.vertical, showsIndicators: false) {
+                            VStack(spacing: 4) {
+                                ForEach(dev.servers) { s in ServerRow(server: s) }
+                            }
+                        }
+                    }
+                }
+                .padding(.leading, 100)
+                .padding(.trailing, 10)
+                .padding(.vertical, 11)
+            }
+            .frame(width: 400)
+            Card {
+                VStack(alignment: .leading, spacing: 7) {
+                    Gauge(label: "CPU", value: dev.health.cpu)
+                    Gauge(label: "Mémoire", value: dev.health.memory)
+                    if let b = dev.health.battery {
+                        Gauge(label: dev.health.charging ? "Batterie ⚡︎" : "Batterie", value: Double(b) / 100, invert: true)
+                    }
+                    HStack {
+                        Text("Chaleur").foregroundStyle(Color.muted)
+                        Spacer()
+                        Text(thermal.0).foregroundStyle(thermal.1)
+                    }
+                    .font(Fonts.caption)
+                }
+                .padding(12)
+                .frame(maxHeight: .infinity, alignment: .center)
+            }
+        }
+        .onAppear { dev.watch(true) }
+        .onDisappear { dev.watch(false) }
+    }
+
+    private var thermal: (String, Color) {
+        switch dev.health.thermal {
+        case .nominal: ("Normale", .success)
+        case .fair: ("Tiède", .warning)
+        case .serious: ("Chaud", .danger)
+        case .critical: ("Brûlant", .danger)
+        @unknown default: ("—", .muted)
+        }
+    }
+}
+
+private struct ServerRow: View {
+    let server: DevMonitor.Server
+    @State private var hover = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle().fill(Color.success).frame(width: 6, height: 6)
+            Text(":\(server.port)").font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+            Text(server.project.isEmpty ? server.command : "\(server.project) · \(server.command)")
+                .font(Fonts.caption).foregroundStyle(Color.muted).lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 4)
+            Button { DevMonitor.shared.open(server) } label: { Image(systemName: "safari").font(.system(size: 11, weight: .semibold)) }
+                .buttonStyle(MiniIcon())
+                .help("Ouvrir http://localhost:\(server.port)")
+                .accessibilityLabel("Ouvrir le port \(server.port) dans le navigateur")
+            Button { DevMonitor.shared.stop(server) } label: { Image(systemName: "stop.fill").font(.system(size: 9.5, weight: .bold)) }
+                .buttonStyle(MiniIcon())
+                .help("Arrêter ce serveur (\(server.command), pid \(server.pid))")
+                .accessibilityLabel("Arrêter le serveur du port \(server.port)")
+        }
+        .padding(.leading, 9)
+        .padding(.trailing, 4)
+        .frame(height: 28)
+        .background(RoundedRectangle(cornerRadius: Radius.item, style: .continuous).fill(.white.opacity(hover ? 0.08 : 0.04)))
+        .onHover { hover = $0 }
+    }
+}
+
+/// Jauge de la santé du Mac : vert, puis orange et rouge quand ça monte (ou descend, pour la batterie).
+private struct Gauge: View {
+    let label: String
+    let value: Double?
+    var invert = false
+
+    var body: some View {
+        let v = value ?? 0, load = invert ? 1 - v : v
+        let tint: Color = load > 0.85 ? .danger : load > 0.65 ? .warning : .success
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text(label).foregroundStyle(Color.muted)
+                Spacer()
+                Text(value.map { "\(Int(($0 * 100).rounded())) %" } ?? "—").monospacedDigit()
+            }
+            .font(Fonts.caption)
+            GeometryReader { g in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.white.opacity(0.08))
+                    Capsule().fill(tint).frame(width: max(3, g.size.width * v))
+                }
+            }
+            .frame(height: 4)
+            .animation(.easeOut(duration: 0.4), value: v)
+        }
+    }
+}
+
+/// Rappel du bonhomme : pause, eau, nuit, batterie, chaleur.
+private struct CarePanel: View {
+    @ObservedObject var store: Store
+
+    var body: some View {
+        let r = store.reminder ?? .pause
+        Card(wash: Color(hex: tint(r), 0.4)) {
+            VStack(alignment: .leading, spacing: 8) {
+                big(title(r))
+                sub(detail(r))
+                HStack(spacing: 8) {
+                    switch r {
+                    case .pause:
+                        Button("C'est fait") { store.answerReminder(later: false) }.buttonStyle(Pill(primary: true))
+                        Button("Dans 10 min") { store.answerReminder(later: true) }.buttonStyle(Pill())
+                    case .heat:
+                        Button("Voir l'onglet Dev") { store.goTo(.dev) }.buttonStyle(Pill(primary: true))
+                        Button("OK") { store.answerReminder(later: false) }.buttonStyle(Pill())
+                    default:
+                        Button(r == .water ? "C'est fait" : "OK") { store.answerReminder(later: false) }.buttonStyle(Pill(primary: true))
+                    }
+                    Spacer()
+                    Button("Couper les rappels") {
+                        Care.shared.enabled = false
+                        store.collapse()
+                    }
+                    .buttonStyle(.plain)
+                    .font(Fonts.caption)
+                    .foregroundStyle(Color.faint)
+                }
+            }
+            .padding(.leading, 100)
+            .padding(.trailing, 16)
+        }
+    }
+
+    private func title(_ r: Reminder) -> String {
+        switch r {
+        case .pause: "Ça fait 50 min que tu codes."
+        case .water: "Un verre d'eau ?"
+        case .night(let h): "Il est \(h) h du matin."
+        case .battery(let b): "Batterie à \(b) %."
+        case .heat: "Ton Mac chauffe."
+        }
+    }
+
+    private func detail(_ r: Reminder) -> String {
+        switch r {
+        case .pause: "Lève-toi, étire-toi, regarde au loin 20 secondes."
+        case .water: "Ton cerveau code mieux hydraté."
+        case .night: "Claude peut continuer demain. Toi, tu devrais dormir."
+        case .battery: "Branche ton Mac avant qu'il coupe en plein build."
+        case .heat: "Un build ou un serveur tourne fort ? Jette un œil."
+        }
+    }
+
+    private func tint(_ r: Reminder) -> String {
+        switch r {
+        case .pause: "#A78BFA"
+        case .water: "#38BDF8"
+        case .night: "#6366F1"
+        case .battery, .heat: "#F4505E"
+        }
+    }
+}
+
 private struct ApprovalPanel: View {
     @ObservedObject var store: Store
     var body: some View {
@@ -943,6 +1325,7 @@ private struct FinishedPanel: View {
             VStack(alignment: .leading, spacing: 8) {
                 Who(session: store.focused, suffix: "Claude a terminé")
                 big(store.focused?.history.last(where: { $0.hasPrefix("«") }).map { "C'est fait : \($0)" } ?? "C'est prêt.")
+                if let t = store.focused?.turn { TurnSummary(turn: t) }
                 HStack(spacing: 8) {
                     if let s = store.focused {
                         Button("Voir dans VS Code") { store.jump(to: s) }.buttonStyle(Pill(primary: true))
@@ -953,6 +1336,39 @@ private struct FinishedPanel: View {
             .padding(.leading, 100)
             .padding(.trailing, 16)
         }
+    }
+}
+
+/// « 4 fichiers en 6 min · +120 −34 » et les fichiers, à ouvrir d'un clic dans VS Code.
+private struct TurnSummary: View {
+    let turn: Turn
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(turn.text).foregroundStyle(Color.muted)
+            if let a = turn.added, let r = turn.removed, a + r > 0 {
+                (Text("+\(a) ").foregroundColor(.success) + Text("−\(r)").foregroundColor(.danger))
+                    .monospacedDigit()
+                    .help("Lignes modifiées dans ces fichiers depuis le dernier commit")
+            }
+            ForEach(turn.files.prefix(3), id: \.self) { path in
+                Button(URL(fileURLWithPath: path).lastPathComponent) { open(path) }
+                    .buttonStyle(Chip())
+                    .frame(maxWidth: 120)
+                    .help("Ouvrir \(path) dans VS Code")
+            }
+            if turn.files.count > 3 { Text("+\(turn.files.count - 3)").foregroundStyle(Color.muted) }
+        }
+        .font(Fonts.label)
+        .lineLimit(1)
+    }
+
+    private func open(_ path: String) {
+        var c = URLComponents()
+        c.scheme = "vscode"
+        c.host = "file"
+        c.path = path
+        if let url = c.url { NSWorkspace.shared.open(url) }
     }
 }
 

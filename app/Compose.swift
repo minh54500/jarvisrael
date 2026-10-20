@@ -9,6 +9,9 @@ struct ComposeField: NSViewRepresentable {
     var placeholder: String
     var onSubmit: () -> Void
     var onEditing: (Bool) -> Void
+    /// Demande de prendre le clavier (raccourci ⌥Espace, capture) ; `onFocused` la consomme.
+    var focus = false
+    var onFocused: () -> Void = {}
 
     func makeNSView(context: Context) -> FieldView {
         let f = FieldView()
@@ -30,7 +33,25 @@ struct ComposeField: NSViewRepresentable {
 
     func updateNSView(_ f: FieldView, context: Context) {
         context.coordinator.parent = self
-        if f.stringValue != text { f.stringValue = text }
+        if f.stringValue != text {
+            f.stringValue = text
+            f.currentEditor()?.selectedRange = NSRange(location: (text as NSString).length, length: 0)  // curseur à la fin
+        }
+        if focus { grab(f, tries: 10) }
+    }
+
+    /// Prend le clavier dès que le champ est dans la fenêtre (il peut être en train d'apparaître).
+    private func grab(_ f: FieldView, tries: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            guard let panel = f.window as? NotchPanel else {
+                if tries > 0 { grab(f, tries: tries - 1) }
+                return
+            }
+            onFocused()
+            panel.takeKeyboard()
+            panel.makeFirstResponder(f)
+            f.currentEditor()?.selectedRange = NSRange(location: (f.stringValue as NSString).length, length: 0)
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }

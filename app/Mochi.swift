@@ -162,7 +162,7 @@ final class Mochi {
         anim(\.roll, [(2 * .pi * turns, d, Ease.inOut)]) { self.s.roll = 0; self.tg.roll = 0 }
     }
 
-    enum Emote { case love, surprised, proud, wink, yawn, happy, annoyed, gulp }
+    enum Emote { case love, surprised, proud, wink, yawn, happy, annoyed, gulp, worried }
 
     func emote(_ e: Emote, _ d: Double = 1.8) {
         overrideUntil = clock + d
@@ -193,6 +193,8 @@ final class Mochi {
             anim(\.blush, [(0.6, 0.2, Ease.out), (0, 0.6, Ease.inOut)])
         case .annoyed:
             eyeOverride = .line
+        case .worried:
+            eyeOverride = .flat
         case .gulp:
             eyeOverride = .content
             anim(\.mouth, [(0, 0.09, Ease.cubicIn)])
