@@ -111,6 +111,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // ⌥Espace (au choix dans les réglages) : écrire à Claude ; avec ⇧ : lui dicter.
         HotKey.installSummon()
+        if LaunchMusic.enabled {  // la musique choisie dans les Réglages, et le bonhomme content
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                LaunchMusic.play()
+                Store.shared.mochi.emote(.happy, 2.5)
+            }
+        }
         store.cleanCaptures()
         NSApp.mainMenu = editMenu()  // ⌘C, ⌘V… dans les champs de la fenêtre Réglages
         _ = ClipHistory.shared  // l'historique du presse-papiers commence maintenant

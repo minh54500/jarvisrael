@@ -36,6 +36,10 @@ private struct SettingsView: View {
     @AppStorage("ntfy.topic") private var topic = ""
     @AppStorage("ntfy.away") private var away = true
     @State private var tested = false
+    @AppStorage("launch.on") private var launchOn = false
+    @AppStorage("launch.volume") private var launchVolume = 0.6
+    @AppStorage("launch.name") private var launchName = ""
+    @State private var listening = false
 
     var body: some View {
         Form {
@@ -93,6 +97,38 @@ private struct SettingsView: View {
                 Text("Installe l'app ntfy sur ton téléphone et abonne-toi au même sujet. Le sujet sert de mot de passe : "
                      + "choisis-le difficile à deviner. Seuls le nom du projet et l'état sont envoyés, jamais tes messages.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Musique au lancement") {
+                Toggle("Jouer une musique quand Encoche démarre", isOn: $launchOn)
+                    .disabled(LaunchMusic.file == nil)
+                HStack {
+                    Text(launchName.isEmpty || LaunchMusic.file == nil ? "Aucun fichier choisi" : launchName)
+                        .foregroundStyle(launchName.isEmpty ? .secondary : .primary)
+                        .lineLimit(1).truncationMode(.middle)
+                    Spacer()
+                    Button("Choisir un fichier…") {
+                        if let name = LaunchMusic.choose() { launchName = name; launchOn = true }
+                    }
+                }
+                HStack {
+                    Image(systemName: "speaker.fill").foregroundStyle(.secondary)
+                    Slider(value: $launchVolume, in: 0...1).onChange(of: launchVolume) { _, v in LaunchMusic.setVolume(v) }
+                    Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary)
+                }
+                .accessibilityLabel("Volume de la musique")
+                Button(listening ? "Arrêter" : "Écouter") {
+                    if listening {
+                        LaunchMusic.stop()
+                        listening = false
+                    } else {
+                        let d = LaunchMusic.play()
+                        listening = d > 0
+                        DispatchQueue.main.asyncAfter(deadline: .now() + d) { if !LaunchMusic.playing { listening = false } }
+                    }
+                }
+                .disabled(LaunchMusic.file == nil)
+                Text("MP3, M4A, WAV… Un clic sur le bonhomme coupe la musique.").font(.caption).foregroundStyle(.secondary)
             }
 
             Section("Général") {
