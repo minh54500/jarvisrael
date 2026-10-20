@@ -335,6 +335,7 @@ final class Store: ObservableObject {
 
     /// Onglets du bandeau : Claude, Musique, Étagère, Dev.
     func goTo(_ p: Panel) {
+        rememberTab(p)
         guard view != p else { return }
         Sound.shared.play("tick")
         if p == .music { Spotify.shared.refresh() }
@@ -346,6 +347,34 @@ final class Store: ObservableObject {
         goTo(!permissions.isEmpty ? .approval : sessions.isEmpty ? .empty : .overview)
     }
 
+    /// Le dernier onglet choisi (Claude, Musique, Étagère, Outils, Potes) : l'encoche rouvre dessus.
+    private var lastTab: Panel? = {
+        switch UserDefaults.standard.string(forKey: "lastTab") {
+        case "music": .music
+        case "shelf": .shelf
+        case "dev": .dev
+        case "friends": .friends
+        default: nil  // Claude : la vue habituelle (sessions, ou rien qui tourne)
+        }
+    }()
+
+    private func rememberTab(_ p: Panel) {
+        let key: String
+        switch p {
+        case .music: key = "music"
+        case .shelf: key = "shelf"
+        case .dev: key = "dev"
+        case .friends: key = "friends"
+        case .overview, .empty, .approval: key = "claude"
+        default: return  // une alerte ou un panneau de passage ne change pas l'onglet retenu
+        }
+        lastTab = key == "claude" ? nil : p
+        UserDefaults.standard.set(key, forKey: "lastTab")
+    }
+
+    /// À l'ouverture : le dernier onglet choisi, sinon la vue habituelle.
+    private var resumeView: Panel { lastTab ?? defaultView }
+
     func expandDefault() {
         if !permissions.isEmpty { return show(.approval) }
         if Date().timeIntervalSince(lastGreet) > 600 {
@@ -353,10 +382,10 @@ final class Store: ObservableObject {
             show(.greeting, sound: "greet")
             mochi.startGreeting()
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.4) {
-                if self.view == .greeting && self.mode == .expanded { withAnimation(Self.openAnimation) { self.view = self.defaultView } }
+                if self.view == .greeting && self.mode == .expanded { withAnimation(Self.openAnimation) { self.view = self.resumeView } }
             }
         } else {
-            show(defaultView)
+            show(resumeView)
         }
     }
 
