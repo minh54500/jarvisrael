@@ -1,10 +1,10 @@
 #!/bin/zsh
 # Installe (ou met à jour) Encoche : télécharge le code, le compile sur ce Mac et l'installe dans ~/Applications.
-#   curl -fsSL https://raw.githubusercontent.com/minh54500/encoche/main/install.sh | zsh
+#   curl -fsSL https://raw.githubusercontent.com/minh54500/jarvisrael/main/install.sh | zsh
 # Compilée sur place, l'app s'ouvre sans l'alerte « développeur non vérifié » de macOS.
 set -euo pipefail
 
-REPO=https://github.com/minh54500/encoche.git
+REPO=https://github.com/minh54500/jarvisrael.git
 SRC=~/.encoche
 
 if (( ${$(sw_vers -productVersion)%%.*} < 14 )); then

@@ -23,7 +23,7 @@ Il te faut un Mac sous **macOS 14 (Sonoma) ou plus récent**, idéalement avec u
 Colle ça dans le Terminal :
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/minh54500/encoche/main/install.sh | zsh
+curl -fsSL https://raw.githubusercontent.com/minh54500/jarvisrael/main/install.sh | zsh
 ```
 
 Le script télécharge le code, le compile sur ton Mac (1 à 2 minutes) et installe Encoche dans `~/Applications`. Si macOS te propose d'installer les « outils de développement », accepte, attends la fin, puis relance la commande.
@@ -64,7 +64,7 @@ Ce script crée un certificat local qui donne toujours la même signature à l'a
 ## Compiler à la main
 
 ```sh
-git clone https://github.com/minh54500/encoche.git
+git clone https://github.com/minh54500/jarvisrael.git encoche
 cd encoche
 ./build.sh
 ```
