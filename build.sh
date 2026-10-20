@@ -9,7 +9,7 @@ RES=$APP/Contents/Resources
 
 rm -rf build && mkdir -p $APP/Contents/MacOS $RES
 swiftc -O -parse-as-library -swift-version 5 -target $(uname -m)-apple-macos14 \
-  app/*.swift -o $APP/Contents/MacOS/Encoche 2>&1 | grep -E "error" || true
+  app/**/*.swift -o $APP/Contents/MacOS/Encoche 2>&1 | grep -E "error" || true
 [[ -x $APP/Contents/MacOS/Encoche ]] || { echo "✗ La compilation a échoué"; exit 1; }
 
 # Icône : le Mochi lui-même, dessiné par le code de l'app
