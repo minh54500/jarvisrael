@@ -12,6 +12,8 @@ struct ComposeField: NSViewRepresentable {
     /// Demande de prendre le clavier (raccourci ⌥Espace, capture) ; `onFocused` la consomme.
     var focus = false
     var onFocused: () -> Void = {}
+    /// ↑ (-1) / ↓ (+1) : l'historique du mini-terminal.
+    var onArrow: ((Int) -> Void)?
 
     func makeNSView(context: Context) -> FieldView {
         let f = FieldView()
@@ -76,6 +78,12 @@ struct ComposeField: NSViewRepresentable {
             switch selector {
             case #selector(NSResponder.insertNewline(_:)):
                 parent.onSubmit()
+                return true
+            case #selector(NSResponder.moveUp(_:)) where parent.onArrow != nil:
+                parent.onArrow?(-1)
+                return true
+            case #selector(NSResponder.moveDown(_:)) where parent.onArrow != nil:
+                parent.onArrow?(1)
                 return true
             case #selector(NSResponder.cancelOperation(_:)):  // Échap
                 control.window?.makeFirstResponder(nil)

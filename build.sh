@@ -35,7 +35,7 @@ cat > $APP/Contents/Info.plist <<EOF
   <key>NSHighResolutionCapable</key><true/>
   <key>NSMicrophoneUsageDescription</key><string>Encoche t'écoute quand tu dictes un message à Claude.</string>
   <key>NSSpeechRecognitionUsageDescription</key><string>Encoche transforme ta voix en texte pour écrire à Claude.</string>
-  <key>NSAppleEventsUsageDescription</key><string>Encoche pilote Spotify depuis l'encoche : lecture, pause, morceau suivant.</string>
+  <key>NSAppleEventsUsageDescription</key><string>Encoche pilote Spotify (lecture, morceau suivant) et le Terminal (écrire à Claude dans le bon onglet).</string>
 </dict></plist>
 EOF
 # Signature : le certificat local « Encoche Dev » (tools/cert.sh, à lancer une fois) garde la même

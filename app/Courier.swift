@@ -24,6 +24,7 @@ enum Courier {
 
     @MainActor
     static func send(_ text: String, to s: Session, done: @escaping @MainActor (Outcome) -> Void) {
+        if s.termProgram == "Apple_Terminal" && !s.tty.isEmpty { return sendToTerminal(text, tty: s.tty, done: done) }
         guard let link = sessionLink(s) else {
             let pb = NSPasteboard.general
             pb.clearContents()
@@ -49,6 +50,103 @@ enum Courier {
                 MainActor.assumeIsolated { done(outcome) }
             }
         }
+    }
+
+    // MARK: Terminal d'Apple
+
+    private static let terminal = "com.apple.Terminal"
+
+    /// Session dans le Terminal : on vérifie que Claude est bien au premier plan dans son onglet (sinon le
+    /// texte partirait dans le shell comme une commande), on amène l'onglet devant, on colle et on envoie.
+    @MainActor
+    private static func sendToTerminal(_ text: String, tty: String, done: @escaping @MainActor (Outcome) -> Void) {
+        guard AXIsProcessTrusted() else {
+            let prompt = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+            _ = AXIsProcessTrustedWithOptions([prompt: true] as CFDictionary)
+            return done(.needsPermission)
+        }
+        let previous = NSWorkspace.shared.frontmostApplication
+        queue.async {
+            let outcome = deliverToTerminal(text, tty: tty)
+            DispatchQueue.main.async {
+                if case .sent = outcome, let previous, let url = previous.bundleURL,
+                   previous.bundleIdentifier != terminal, previous != NSRunningApplication.current {
+                    NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+                }
+                MainActor.assumeIsolated { done(outcome) }
+            }
+        }
+    }
+
+    private static func deliverToTerminal(_ text: String, tty: String) -> Outcome {
+        guard claudeInFront(tty) else { return .failed("Claude ne tourne plus dans cet onglet du Terminal : rien n'a été envoyé.") }
+        switch focusTerminalTab(tty) {
+        case "ok": break
+        case "denied": return .failed("Autorise Encoche à piloter le Terminal : Réglages Système → Confidentialité → Automatisation.")
+        default: return .failed("Je ne trouve plus l'onglet de cette session dans le Terminal.")
+        }
+        guard wait(3, { NSWorkspace.shared.frontmostApplication?.bundleIdentifier == terminal }),
+              let app = NSRunningApplication.runningApplications(withBundleIdentifier: terminal).first
+        else { return .failed("Le Terminal n'est pas passé devant.") }
+        Thread.sleep(forTimeInterval: 0.25)
+        let saved = DispatchQueue.main.sync { Clipboard.put(text) }
+        defer {
+            Thread.sleep(forTimeInterval: 0.3)
+            DispatchQueue.main.sync { Clipboard.restore(saved) }
+        }
+        press(app.processIdentifier, 9, .maskCommand)  // ⌘V (collage « entre crochets » : les retours à la ligne restent dans le message)
+        Thread.sleep(forTimeInterval: 0.3)
+        press(app.processIdentifier, 36)  // Entrée
+        return .sent
+    }
+
+    /// Le programme au premier plan de ce terminal est-il Claude ? (« + » dans l'état = premier plan.)
+    private static func claudeInFront(_ tty: String) -> Bool {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/ps")
+        p.arguments = ["-t", tty.replacingOccurrences(of: "/dev/", with: ""), "-o", "stat=,command="]
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return false }
+        let lines = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n")
+        p.waitUntilExit()
+        return lines.contains { line in
+            let cols = line.split(separator: " ", maxSplits: 1)
+            return cols.count == 2 && cols[0].contains("+") && cols[1].lowercased().contains("claude")
+        }
+    }
+
+    /// Met l'onglet de ce terminal devant (AppleScript). « ok », « notfound » ou « denied ».
+    @discardableResult
+    static func focusTerminalTab(_ tty: String) -> String {
+        let script = """
+            tell application id "\(terminal)"
+              repeat with w in windows
+                repeat with t in tabs of w
+                  if tty of t is "\(tty)" then
+                    set selected of t to true
+                    set index of w to 1
+                    activate
+                    return "ok"
+                  end if
+                end repeat
+              end repeat
+            end tell
+            return "notfound"
+            """
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        p.arguments = ["-e", script]
+        let out = Pipe(), err = Pipe()
+        p.standardOutput = out
+        p.standardError = err
+        guard (try? p.run()) != nil else { return "notfound" }
+        let result = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let error = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        p.waitUntilExit()
+        if error.contains("-1743") { return "denied" }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: Étapes (file de fond : l'animation de l'encoche n'est jamais bloquée)

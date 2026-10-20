@@ -546,8 +546,8 @@ private struct OverviewPanel: View {
                                 Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .bold))
                             }
                             .buttonStyle(IconButton())
-                            .help("Ouvrir dans VS Code")
-                            .accessibilityLabel("Ouvrir \(s.name) dans VS Code")
+                            .help("Ouvrir dans \(s.place)")
+                            .accessibilityLabel("Ouvrir \(s.name) dans \(s.place)")
                         }
                     }
                     if let notice = store.notice {
@@ -1166,7 +1166,130 @@ private struct RoundBody: View {
 }
 
 /// Onglet Dev : serveurs locaux à gauche, santé du Mac à droite.
+/// Onglet Dev : le mini-terminal, ou les serveurs locaux et la santé du Mac.
 private struct DevPanel: View {
+    @ObservedObject var store: Store
+
+    var body: some View {
+        if store.devShowsServers { ServersPanel(store: store) } else { TerminalPanel(store: store) }
+    }
+}
+
+private struct DevSwitch: View {
+    @ObservedObject var store: Store
+    var body: some View {
+        Segments(left: "Terminal", right: "Serveurs · Mac", rightOn: store.devShowsServers) { on in
+            Sound.shared.play("tick")
+            withAnimation(Store.openAnimation) { store.devShowsServers = on }
+        }
+    }
+}
+
+/// Mini-terminal : dossier, résultat en direct, commande (Entrée), ↑/↓ pour l'historique.
+private struct TerminalPanel: View {
+    @ObservedObject var store: Store
+    @ObservedObject var shell = Shell.shared
+
+    var body: some View {
+        Card(wash: Color(hex: "#34D399", 0.12)) {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 8) {
+                    DevSwitch(store: store)
+                    folderMenu
+                    Spacer(minLength: 4)
+                    if shell.running {
+                        ProgressView().controlSize(.mini)
+                    } else if let code = shell.lastExit {
+                        Image(systemName: code == 0 ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .font(.system(size: 12)).foregroundStyle(code == 0 ? Color.success : Color.danger)
+                            .help(code == 0 ? "Réussi" : "Code de sortie \(code)")
+                    }
+                    Button { shell.clear() } label: { Image(systemName: "trash").font(.system(size: 10.5, weight: .semibold)) }
+                        .buttonStyle(MiniIcon()).help("Effacer").accessibilityLabel("Effacer le résultat")
+                    Button { shell.openInTerminal() } label: { Image(systemName: "macwindow").font(.system(size: 10.5, weight: .semibold)) }
+                        .buttonStyle(MiniIcon()).help("Ouvrir ce dossier dans le Terminal").accessibilityLabel("Ouvrir dans le Terminal")
+                }
+                ScrollViewReader { reader in
+                    ScrollView(.vertical) {
+                        Text(shell.output.isEmpty ? "Tape une commande (git status, npm run build…) : le résultat s'affiche ici."
+                                                  : shell.output.joined(separator: "\n"))
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(shell.output.isEmpty ? Color.faint : Color.soft)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                        Color.clear.frame(height: 1).id("fin")
+                    }
+                    .onChange(of: shell.output.count) { _, _ in reader.scrollTo("fin", anchor: .bottom) }
+                    .onAppear { reader.scrollTo("fin", anchor: .bottom) }
+                }
+                .background(RoundedRectangle(cornerRadius: Radius.item, style: .continuous).fill(Color.sunken))
+                .overlay(RoundedRectangle(cornerRadius: Radius.item, style: .continuous).strokeBorder(.white.opacity(0.05)))
+                HStack(spacing: 6) {
+                    Text("$").font(.system(size: 12, weight: .bold, design: .monospaced)).foregroundStyle(Color.success)
+                    ComposeField(text: $shell.command, placeholder: "Commande dans \(shell.folderName)… (Entrée)",
+                                 onSubmit: { shell.run() }, onEditing: { store.setComposing($0) }, onArrow: { shell.browse($0) })
+                        .frame(height: 18)
+                    if shell.running {
+                        Button { shell.stop() } label: { Image(systemName: "stop.fill").font(.system(size: 9.5, weight: .bold)) }
+                            .buttonStyle(MiniIcon()).help("Arrêter (comme ⌃C)").accessibilityLabel("Arrêter la commande")
+                    } else {
+                        Button { shell.run() } label: { Image(systemName: "return").font(.system(size: 10.5, weight: .bold)) }
+                            .buttonStyle(MiniIcon()).help("Lancer (Entrée)").accessibilityLabel("Lancer la commande")
+                            .disabled(shell.command.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
+                .padding(.leading, 10)
+                .padding(.trailing, 4)
+                .padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(.white.opacity(store.composing ? 0.11 : 0.07)))
+            }
+            .padding(.leading, 100)
+            .padding(.trailing, 12)
+            .padding(.vertical, 10)
+        }
+    }
+
+    /// Le dossier : projets des sessions Claude, dossiers récents, ou au choix.
+    private var folderMenu: some View {
+        Menu {
+            let projects = Array(Set(store.sessions.map(\.cwd))).sorted()
+            if !projects.isEmpty {
+                Section("Projets Claude") {
+                    ForEach(projects, id: \.self) { p in Button(URL(fileURLWithPath: p).lastPathComponent) { shell.setFolder(URL(fileURLWithPath: p)) } }
+                }
+            }
+            let recent = shell.recent.filter { !projects.contains($0) }
+            if !recent.isEmpty {
+                Section("Récents") {
+                    ForEach(recent, id: \.self) { p in Button(URL(fileURLWithPath: p).lastPathComponent) { shell.setFolder(URL(fileURLWithPath: p)) } }
+                }
+            }
+            Divider()
+            Button("Dossier personnel") { shell.setFolder(FileManager.default.homeDirectoryForCurrentUser) }
+            Button("Choisir un dossier…") { shell.chooseFolder() }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "folder.fill").font(.system(size: 10))
+                Text(shell.folderName).lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
+            }
+            .font(Fonts.caption.weight(.medium))
+            .foregroundStyle(Color.soft)
+            .padding(.horizontal, 8)
+            .frame(height: 22)
+            .background(Capsule().fill(.white.opacity(0.07)))
+            .contentShape(Capsule())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(shell.folder.path)
+    }
+}
+
+private struct ServersPanel: View {
     @ObservedObject var store: Store
     @ObservedObject var dev = DevMonitor.shared
 
@@ -1174,7 +1297,7 @@ private struct DevPanel: View {
         HStack(spacing: 10) {
             Card {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Serveurs de dev").font(Fonts.labelBold).foregroundStyle(Color.muted)
+                    DevSwitch(store: store)
                     if dev.servers.isEmpty {
                         Spacer(minLength: 0)
                         Text(dev.scanned ? "Aucun serveur ne tourne." : "Je regarde…").font(Fonts.lead)
@@ -1571,7 +1694,7 @@ private struct FinishedPanel: View {
                 if let t = store.focused?.turn { TurnSummary(turn: t) }
                 HStack(spacing: 8) {
                     if let s = store.focused {
-                        Button("Voir dans VS Code") { store.jump(to: s) }.buttonStyle(Pill(primary: true))
+                        Button("Voir dans \(s.place)") { store.jump(to: s) }.buttonStyle(Pill(primary: true))
                     }
                     Button("OK") { store.dismissCurrent() }.buttonStyle(Pill())
                 }
@@ -1635,7 +1758,7 @@ private struct ErrorPanel: View {
                 sub(store.focused?.message ?? "", red: true)
                 HStack(spacing: 8) {
                     if let s = store.focused {
-                        Button("Voir dans VS Code") { store.jump(to: s) }.buttonStyle(Pill(primary: true))
+                        Button("Voir dans \(s.place)") { store.jump(to: s) }.buttonStyle(Pill(primary: true))
                     }
                     Button("OK") { store.dismissCurrent() }.buttonStyle(Pill())
                 }

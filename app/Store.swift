@@ -13,6 +13,7 @@ struct Session: Identifiable {
     var updated = Date()
     var termProgram = ""
     var entrypoint = ""  // "claude-vscode" : session de l'extension VS Code (onglet Claude Code)
+    var tty = ""         // onglet du Terminal d'Apple où tourne la session (/dev/ttys003…)
     var message = ""
     var model = ""  // "claude-opus-5-5"… annoncé par Claude Code au démarrage de la session
     var turnStart: Date?    // début de la demande en cours
@@ -26,6 +27,16 @@ struct Session: Identifiable {
         todos.isEmpty ? nil : (todos.filter { $0.status == "completed" }.count, todos.count)
     }
     var currentTodo: Todo? { todos.first { $0.status == "in_progress" } }
+
+    /// Où vit la session, pour les boutons « Voir dans … ».
+    var place: String {
+        if entrypoint == "claude-vscode" { return "VS Code" }
+        switch termProgram {
+        case "Apple_Terminal": return "le Terminal"
+        case "iTerm.app": return "iTerm"
+        default: return "VS Code"
+        }
+    }
 }
 
 /// Une tâche de la liste de Claude : « pending », « in_progress » ou « completed ».
@@ -176,7 +187,7 @@ final class Store: ObservableObject {
         case .approval: 206
         case .finished: focused?.turn == nil ? 176 : (focused?.turn?.files.isEmpty ?? true) ? 196 : 226
         case .error, .choose: 176
-        case .dev: 206
+        case .dev: devShowsServers ? 206 : 246
         case .care: 164
         case .todos: 216
         case .friends: 184
@@ -736,6 +747,7 @@ final class Store: ObservableObject {
         s.updated = Date()
         if let term = ev["term_program"] as? String, !term.isEmpty { s.termProgram = term }
         if let entry = ev["entrypoint"] as? String, !entry.isEmpty { s.entrypoint = entry }
+        if let tty = ev["tty"] as? String, !tty.isEmpty { s.tty = tty }
         if let model = ev["model"] as? String, !model.isEmpty { s.model = model }
 
         switch event {
@@ -951,7 +963,7 @@ final class Store: ObservableObject {
         savedAt = Date()
         UserDefaults.standard.set(sessions.map {
             ["id": $0.id, "cwd": $0.cwd, "name": $0.name, "color": $0.color, "term": $0.termProgram,
-             "entrypoint": $0.entrypoint, "model": $0.model, "transcript": $0.transcript, "updated": $0.updated.timeIntervalSince1970]
+             "entrypoint": $0.entrypoint, "tty": $0.tty, "model": $0.model, "transcript": $0.transcript, "updated": $0.updated.timeIntervalSince1970]
         }, forKey: "sessions")
     }
 
@@ -968,6 +980,7 @@ final class Store: ObservableObject {
             var s = Session(id: id, cwd: cwd, name: d["name"] as? String ?? URL(fileURLWithPath: cwd).lastPathComponent, color: color)
             s.termProgram = d["term"] as? String ?? ""
             s.entrypoint = d["entrypoint"] as? String ?? ""
+            s.tty = d["tty"] as? String ?? ""
             s.model = d["model"] as? String ?? ""
             s.transcript = transcript
             s.updated = touched
@@ -1064,6 +1077,23 @@ final class Store: ObservableObject {
         objectWillChange.send()
     }
 
+    /// Onglet Dev : le mini-terminal, ou les serveurs et la santé du Mac.
+    @Published var devShowsServers = false
+
+    /// Une commande du mini-terminal est finie : si elle a duré et qu'on regardait ailleurs, le bonhomme le dit.
+    func shellFinished(ok: Bool, seconds: Double) {
+        guard seconds > 8, !(mode == .expanded && view == .dev) else { return }
+        Sound.shared.play(ok ? "finish" : "error")
+        mochi.emote(ok ? .happy : .worried, 1.8)
+        guard !busy else { return }
+        devShowsServers = false
+        show(.dev, sound: nil)
+        pinUntil = Date().addingTimeInterval(4)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.2) {
+            if self.view == .dev && !self.hovering && !self.composing { self.collapse() }
+        }
+    }
+
     /// Un pote m'envoie un cœur ou un coucou : le bonhomme réagit, et l'onglet Potes s'ouvre si on n'est pas occupé.
     func poked(heart: Bool) {
         mochi.emote(heart ? .love : .wink, 2.2)
@@ -1099,6 +1129,15 @@ final class Store: ObservableObject {
     /// session pour l'extension Claude Code), Terminal ou iTerm.
     func openSession(_ s: Session) {
         let ws = NSWorkspace.shared
+        if s.termProgram == "Apple_Terminal" && !s.tty.isEmpty {  // le bon onglet, pas seulement l'app
+            let tty = s.tty
+            DispatchQueue.global().async {
+                if Courier.focusTerminalTab(tty) != "ok", let app = ws.urlForApplication(withBundleIdentifier: "com.apple.Terminal") {
+                    ws.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration())
+                }
+            }
+            return
+        }
         let bundle: String
         switch s.termProgram {
         case _ where s.entrypoint == "claude-vscode": bundle = "com.microsoft.VSCode"

@@ -15,6 +15,7 @@ Si l'app ne tourne pas, le script ne dit rien et Claude Code se comporte normale
 import json
 import os
 import socket
+import subprocess
 import sys
 import time
 
@@ -110,6 +111,15 @@ def send(payload, wait):
     return json.loads(text) if text else None
 
 
+def parent_tty():
+    """L'onglet du Terminal où tourne Claude (/dev/ttys003…) : son terminal à lui, le processus parent."""
+    try:
+        out = subprocess.run(["ps", "-o", "tty=", "-p", str(os.getppid())], capture_output=True, text=True, timeout=1).stdout.strip()
+        return "/dev/" + out if out and out != "??" else ""
+    except Exception:
+        return ""
+
+
 def relay():
     try:
         payload = json.loads(sys.stdin.buffer.read() or b"{}")
@@ -120,6 +130,8 @@ def relay():
     payload.setdefault("bundle_id", env.get("__CFBundleIdentifier", ""))
     payload.setdefault("entrypoint", env.get("CLAUDE_CODE_ENTRYPOINT", ""))  # "claude-vscode" = extension VS Code
     payload.setdefault("cwd", os.getcwd())
+    if env.get("TERM_PROGRAM") == "Apple_Terminal":
+        payload.setdefault("tty", parent_tty())
     event = payload.get("hook_event_name", "")
 
     if event != "PermissionRequest":
