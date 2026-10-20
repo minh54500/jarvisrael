@@ -114,6 +114,7 @@ struct Permission: Identifiable {
     let at = Date()
     var kind = Kind.tool
     var input: [String: Any] = [:]
+    var agent: String?   // sous-agent qui demande (nil : Claude lui-même)
 
     /// Les questions (AskUserQuestion) : texte, options, choix multiple.
     var questions: [(question: String, header: String, options: [(label: String, detail: String)], multi: Bool)] {
@@ -137,6 +138,7 @@ struct Toast: Equatable {
     var title: String
     var text: String
     var opensChat = false
+    var opensUpdate = false  // nouvelle version d'Encoche : un clic ouvre la mise à jour
 }
 enum Panel: Equatable { case greeting, overview, empty, approval, finished, error, upload, choose, converting, result, shelf, music, dev, care, todos, friends }
 
@@ -403,6 +405,7 @@ final class Store: ObservableObject {
     func collapse() {
         let was = mode
         pinUntil = nil
+        if tool == .mirror { tool = .terminal }  // la caméra ne se rallume jamais toute seule à la prochaine ouverture
         toast = nil
         wantsFocus = false
         if composing { setComposing(false) }
@@ -858,6 +861,9 @@ final class Store: ObservableObject {
             s.state = .idle
             s.line = "Session ouverte"
         case "UserPromptSubmit":
+            // Nouveau message : les demandes encore affichées pour cette session n'attendent plus rien.
+            for p in permissions where p.session == sid { p.responder.close() }
+            permissions.removeAll { $0.session == sid }
             s.state = .working
             s.turnStart = Date()
             if let path = ev["transcript_path"] as? String {
@@ -878,7 +884,9 @@ final class Store: ObservableObject {
                                detail: plan ? short(input["plan"] as? String ?? "", 200) : "", responder: responder!)
             p.kind = plan ? .plan : .question
             p.input = input
+            p.agent = ev["agent_id"] as? String
             permissions.append(p)
+            watch(p)
             s.state = plan ? .approval : .waiting
             s.line = plan ? "Propose un plan" : "Te pose une question"
             push(&s)
@@ -913,9 +921,11 @@ final class Store: ObservableObject {
             s.line = describe(ev["tool_name"] as? String ?? "", ev["tool_input"] as? [String: Any] ?? [:])
             push(&s)
         case "PostToolUse", "PostToolUseFailure":
-            // Permission tranchée ailleurs (dans le terminal) : on la retire.
-            for p in permissions where p.session == sid { p.responder.close() }
-            permissions.removeAll { $0.session == sid }
+            // Permission tranchée ailleurs (dans le terminal) : on la retire. Seulement celles du même agent :
+            // les outils d'un sous-agent portent l'identifiant de la session, mais pas la même demande.
+            let agent = ev["agent_id"] as? String
+            for p in permissions where p.session == sid && p.agent == agent { p.responder.close() }
+            permissions.removeAll { $0.session == sid && $0.agent == agent }
             s.state = .working
             if event == "PostToolUseFailure" { s.line = "✗ " + s.line }
             let input = ev["tool_input"] as? [String: Any] ?? [:]
@@ -927,7 +937,10 @@ final class Store: ObservableObject {
         case "PermissionRequest":
             guard let responder else { break }
             let (title, detail) = permissionText(ev["tool_name"] as? String ?? "", ev["tool_input"] as? [String: Any] ?? [:])
-            permissions.append(Permission(session: sid, title: title, detail: detail, responder: responder))
+            var request = Permission(session: sid, title: title, detail: detail, responder: responder)
+            request.agent = ev["agent_id"] as? String
+            permissions.append(request)
+            watch(request)
             s.state = .approval
             if draft.isEmpty && !sending { focus = sid }  // pas de changement de destinataire en pleine écriture
             store(s)
@@ -1160,6 +1173,20 @@ final class Store: ObservableObject {
         }
     }
 
+    /// Si le hook s'en va sans réponse (Claude Code a abandonné), la carte disparaît de l'encoche.
+    private func watch(_ p: Permission) {
+        let id = p.id
+        p.responder.onGone = { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.permissions.contains(where: { $0.id == id }) else { return }
+                self.permissions.removeAll { $0.id == id }
+                self.refreshMochi()
+                if self.permissions.isEmpty && self.view == .approval { self.collapseSoon() }
+            }
+        }
+        p.responder.watchClose()
+    }
+
     private func expire(_ id: UUID) {
         guard let p = permissions.first(where: { $0.id == id }) else { return }
         p.responder.close()
@@ -1316,7 +1343,7 @@ final class Store: ObservableObject {
     /// Onglet Dev : le mini-terminal, ou les serveurs et la santé du Mac.
     /// Onglet Outils : Terminal, Serveurs · Mac, Texte IA, Miroir, Prompteur.
     enum Tool: String, CaseIterable { case terminal = "Terminal", servers = "Serveurs", text = "Texte IA", mirror = "Miroir", prompter = "Prompteur" }
-    @Published var tool = Tool(rawValue: UserDefaults.standard.string(forKey: "tool") ?? "") ?? .terminal {
+    @Published var tool = Tool(rawValue: UserDefaults.standard.string(forKey: "tool") ?? "").flatMap { $0 == .mirror ? nil : $0 } ?? .terminal {
         didSet { UserDefaults.standard.set(tool.rawValue, forKey: "tool") }
     }
 

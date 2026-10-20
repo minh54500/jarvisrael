@@ -22,7 +22,7 @@ Un petit bonhomme qui vit dans l'encoche de ton Mac et garde un œil sur Claude 
   - **Prompteur** : ton texte défile sous la caméra pour lire en regardant l'objectif.
 - **Spotify** : le morceau en cours, lecture/pause, précédent/suivant, et les **paroles synchronisées** (LRCLIB).
 - **AirPods** : leur batterie (écouteurs et boîtier) dès qu'ils se connectent. **AirDrop** depuis l'étagère.
-- **Discrète en visio** : l'encoche est invisible dans les partages d'écran, enregistrements et captures (réglable).
+- **Discrète** : l'encoche n'apparaît pas dans les captures et enregistrements d'écran (réglable). En partage d'écran (Zoom, Meet…), ça dépend de l'app : vérifie avant un appel important.
 - **Rappels** : pause, verre d'eau, « va dormir »… Tout se coupe dans les Réglages.
 - **Entre potes** : partagez un groupe, voyez les bonshommes des autres (et s'ils sont sur leur Mac), discutez dans le chat, envoyez-vous des cœurs.
 - **Le plan de Claude** : sa liste de tâches, cochée au fur et à mesure.

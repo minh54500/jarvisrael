@@ -22,19 +22,25 @@ final class Lyrics: ObservableObject {
         req.setValue("Encoche (https://github.com/minh54500/jarvisrael)", forHTTPHeaderField: "User-Agent")
         let id = t.id, artist = t.artist, name = t.name
         URLSession.shared.dataTask(with: req) { data, _, _ in
-            var synced = (data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })?["syncedLyrics"] as? String
-            if synced == nil { synced = Self.search(artist: artist, track: name) }  // durée un peu différente : on cherche
-            let parsed = Self.parse(synced ?? "")
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    let l = Lyrics.shared
-                    guard l.loading == id else { return }
-                    l.lines = parsed
-                    l.loadedFor = id
-                    l.loading = ""
-                }
+            if let synced = (data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })?["syncedLyrics"] as? String {
+                return Self.deliver(synced, for: id)
             }
+            // Durée un peu différente : recherche plus large, lancée comme une deuxième requête (jamais attendue ici).
+            Self.search(artist: artist, track: name) { Self.deliver($0 ?? "", for: id) }
         }.resume()
+    }
+
+    nonisolated private static func deliver(_ lrc: String, for id: String) {
+        let parsed = parse(lrc)
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                let l = Lyrics.shared
+                guard l.loading == id else { return }
+                l.lines = parsed
+                l.loadedFor = id
+                l.loading = ""
+            }
+        }
     }
 
     /// La ligne en cours et la suivante, à cette position du morceau.
@@ -44,21 +50,16 @@ final class Lyrics: ObservableObject {
     }
 
     /// Recherche plus large (même titre et artiste, durée différente) : le premier résultat synchronisé.
-    nonisolated private static func search(artist: String, track: String) -> String? {
+    nonisolated private static func search(artist: String, track: String, done: @escaping @Sendable (String?) -> Void) {
         var c = URLComponents(string: "https://lrclib.net/api/search")!
         c.queryItems = [URLQueryItem(name: "artist_name", value: artist), URLQueryItem(name: "track_name", value: track)]
-        guard let url = c.url else { return nil }
+        guard let url = c.url else { return done(nil) }
         var req = URLRequest(url: url)
         req.setValue("Encoche (https://github.com/minh54500/jarvisrael)", forHTTPHeaderField: "User-Agent")
-        let done = DispatchSemaphore(value: 0)
-        nonisolated(unsafe) var found: String?
         URLSession.shared.dataTask(with: req) { data, _, _ in
             let list = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] } ?? []
-            found = list.lazy.compactMap { $0["syncedLyrics"] as? String }.first
-            done.signal()
+            done(list.lazy.compactMap { $0["syncedLyrics"] as? String }.first)
         }.resume()
-        _ = done.wait(timeout: .now() + 8)
-        return found
     }
 
     /// « [01:23.45] paroles » → (83.45, « paroles »).

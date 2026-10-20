@@ -59,15 +59,33 @@ final class TextAI: ObservableObject {
         origin = url.lastPathComponent
         result = ""
         error = nil
-        let text: String?
-        if url.pathExtension.lowercased() == "pdf" {
-            text = PDFDocument(url: url)?.string
-        } else {
-            text = try? String(contentsOf: url, encoding: .utf8)
-        }
-        source = String((text ?? "").prefix(40_000)).trimmingCharacters(in: .whitespacesAndNewlines)
+        source = ""
+        busy = .summary
         Store.shared.openTool(.text)
-        if source.isEmpty { error = "Je n'arrive pas à lire le texte de ce fichier." } else { run(.summary) }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let text = Self.read(url, limit: 40_000)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let ai = TextAI.shared
+                    ai.busy = nil
+                    ai.source = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if ai.source.isEmpty { ai.error = "Je n'arrive pas à lire le texte de ce fichier." } else { ai.run(.summary) }
+                }
+            }
+        }
+    }
+
+    /// Le texte d'un fichier, sans tout charger : un PDF page par page, un texte par le début.
+    nonisolated private static func read(_ url: URL, limit: Int) -> String {
+        if url.pathExtension.lowercased() == "pdf" {
+            guard let doc = PDFDocument(url: url) else { return "" }
+            var out = ""
+            for i in 0..<doc.pageCount where out.count < limit { out += (doc.page(at: i)?.string ?? "") + "\n" }
+            return String(out.prefix(limit))
+        }
+        guard let h = try? FileHandle(forReadingFrom: url), let data = try? h.read(upToCount: limit * 4) else { return "" }
+        try? h.close()
+        return String(String(decoding: data, as: UTF8.self).prefix(limit))
     }
 
     static func canSummarize(_ url: URL) -> Bool { ["pdf", "txt", "md", "markdown", "csv", "json", "html"].contains(url.pathExtension.lowercased()) }
@@ -107,15 +125,13 @@ final class TextAI: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             if Self.replaceSelectionAX(text) { return Sound.shared.play("approve") }
             let pb = NSPasteboard.general
-            let saved = pb.string(forType: .string)
+            let saved = Self.saveClipboard()
             pb.clearContents()
             pb.setString(text, forType: .string)
             pb.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
+            let mine = pb.changeCount
             Self.press(app.processIdentifier, 9, .maskCommand)  // ⌘V
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                pb.clearContents()
-                if let saved { pb.setString(saved, forType: .string) }
-            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { Self.restoreClipboard(saved, ifStill: mine) }
             Sound.shared.play("approve")
         }
     }
@@ -147,15 +163,31 @@ final class TextAI: ObservableObject {
     private static func selectedTextByCopy(_ app: NSRunningApplication?) -> String? {
         guard let app, AXIsProcessTrusted() else { return nil }
         let pb = NSPasteboard.general
-        let saved = pb.string(forType: .string), before = pb.changeCount
+        let saved = saveClipboard(), before = pb.changeCount
         press(app.processIdentifier, 8, .maskCommand)  // ⌘C
-        let end = Date().addingTimeInterval(0.6)
+        let end = Date().addingTimeInterval(1.0)
         while pb.changeCount == before && Date() < end { RunLoop.current.run(until: Date().addingTimeInterval(0.03)) }
         guard pb.changeCount != before else { return nil }
         let text = pb.string(forType: .string)
-        pb.clearContents()
-        if let saved { pb.setString(saved, forType: .string) }
+        restoreClipboard(saved, ifStill: pb.changeCount)
         return text
+    }
+
+    /// Copie complète du presse-papiers : chaque élément avec tous ses types (image, fichier, texte mis en forme…).
+    private static func saveClipboard() -> [NSPasteboardItem] {
+        (NSPasteboard.general.pasteboardItems ?? []).map { item in
+            let copy = NSPasteboardItem()
+            for t in item.types { if let d = item.data(forType: t) { copy.setData(d, forType: t) } }
+            return copy
+        }
+    }
+
+    /// Rend le presse-papiers d'avant, sauf si quelqu'un a copié autre chose entre-temps.
+    private static func restoreClipboard(_ items: [NSPasteboardItem], ifStill change: Int) {
+        let pb = NSPasteboard.general
+        guard pb.changeCount == change else { return }
+        pb.clearContents()
+        if !items.isEmpty { pb.writeObjects(items) }
     }
 
     private static func press(_ pid: pid_t, _ key: CGKeyCode, _ flags: CGEventFlags = []) {

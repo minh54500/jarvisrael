@@ -5,7 +5,28 @@ import Foundation
 
 final class Responder {
     private var fd: Int32
+    private var watch: DispatchSourceRead?
+    /// Le hook est parti sans réponse (Claude Code a abandonné, Échap dans VS Code…).
+    var onGone: (() -> Void)?
+
     init(fd: Int32) { self.fd = fd }
+
+    /// Surveille la connexion (sur le fil principal) : sa fermeture côté hook veut dire « plus la peine de répondre ».
+    func watchClose() {
+        guard fd >= 0, watch == nil else { return }
+        let src = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
+        src.setEventHandler { [weak self] in
+            guard let self, self.fd >= 0 else { return }
+            var b: UInt8 = 0
+            let n = recv(self.fd, &b, 1, MSG_PEEK | MSG_DONTWAIT)
+            if n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                self.close()
+                self.onGone?()
+            }
+        }
+        src.resume()
+        watch = src
+    }
 
     func reply(_ object: [String: Any]) {
         guard fd >= 0, var data = try? JSONSerialization.data(withJSONObject: object) else { return close() }
@@ -15,8 +36,15 @@ final class Responder {
     }
 
     func close() {
-        if fd >= 0 { Darwin.close(fd) }
+        let f = fd
         fd = -1
+        if let w = watch {  // le descripteur se ferme une fois la surveillance arrêtée
+            watch = nil
+            w.setCancelHandler { if f >= 0 { Darwin.close(f) } }
+            w.cancel()
+        } else if f >= 0 {
+            Darwin.close(f)
+        }
     }
 
     deinit { close() }

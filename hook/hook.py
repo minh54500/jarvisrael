@@ -19,8 +19,9 @@ import subprocess
 import sys
 import time
 
-SOCKET = os.path.expanduser("~/Library/Application Support/Encoche/encoche.sock")
-SETTINGS = os.path.expanduser("~/.claude/settings.json")
+# (ENCOCHE_SOCKET / ENCOCHE_SETTINGS : seulement pour les tests, voir tests/test_hook.py)
+SOCKET = os.environ.get("ENCOCHE_SOCKET") or os.path.expanduser("~/Library/Application Support/Encoche/encoche.sock")
+SETTINGS = os.environ.get("ENCOCHE_SETTINGS") or os.path.expanduser("~/.claude/settings.json")
 EVENTS = {  # événement -> délai max accordé par Claude Code (s)
     # PreToolUse : 120 s, car les questions de Claude et ses plans attendent la réponse donnée dans l'encoche.
     "SessionStart": 10, "UserPromptSubmit": 10, "PreToolUse": 120, "PostToolUse": 10,

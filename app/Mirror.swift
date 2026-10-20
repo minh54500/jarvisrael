@@ -1,6 +1,18 @@
 import AVFoundation
 import SwiftUI
 
+/// Caméra refusée dans les Réglages Système : le miroir l'explique au lieu d'un rectangle noir.
+@MainActor
+final class CameraAccess: ObservableObject {
+    static let shared = CameraAccess()
+    @Published var denied = AVCaptureDevice.authorizationStatus(for: .video) == .denied
+        || AVCaptureDevice.authorizationStatus(for: .video) == .restricted
+
+    func openSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera") { NSWorkspace.shared.open(url) }
+    }
+}
+
 /// Miroir : la caméra du Mac, en miroir, pour vérifier sa tête avant une visio. La caméra ne s'allume
 /// que tant que le miroir est affiché.
 struct MirrorView: NSViewRepresentable {
@@ -13,7 +25,7 @@ final class CameraView: NSView {
     private let session = AVCaptureSession()
     private let preview: AVCaptureVideoPreviewLayer
     private let queue = DispatchQueue(label: "encoche.camera")
-    var denied: ((Bool) -> Void)?
+    private var stopped = false  // lu et écrit sur `queue` : jamais démarrer après un arrêt
 
     override init(frame: NSRect) {
         preview = AVCaptureVideoPreviewLayer(session: session)
@@ -24,7 +36,10 @@ final class CameraView: NSView {
         preview.videoGravity = .resizeAspectFill
         layer?.addSublayer(preview)
         AVCaptureDevice.requestAccess(for: .video) { ok in
-            guard ok else { return }
+            guard ok else {
+                DispatchQueue.main.async { MainActor.assumeIsolated { CameraAccess.shared.denied = true } }
+                return
+            }
             self.queue.async { self.configure() }
         }
     }
@@ -37,7 +52,7 @@ final class CameraView: NSView {
     }
 
     private func configure() {
-        guard let device = AVCaptureDevice.default(for: .video), let input = try? AVCaptureDeviceInput(device: device),
+        guard !stopped, let device = AVCaptureDevice.default(for: .video), let input = try? AVCaptureDeviceInput(device: device),
               session.canAddInput(input) else { return }
         session.beginConfiguration()
         session.sessionPreset = .high
@@ -49,8 +64,13 @@ final class CameraView: NSView {
                 c.isVideoMirrored = true
             }
         }
-        session.startRunning()
+        if !stopped { session.startRunning() }
     }
 
-    func stop() { queue.async { self.session.stopRunning() } }
+    func stop() {
+        queue.async {
+            self.stopped = true
+            self.session.stopRunning()
+        }
+    }
 }

@@ -106,7 +106,7 @@ enum Claude {
             var args = ["-p", "--setting-sources", "project", "--model", model, "--no-session-persistence",
                         "--tools", "", "--system-prompt", system]
             if stream { args += ["--output-format", "stream-json", "--verbose"] }
-            p.arguments = args + [prompt]
+            p.arguments = args + ["--", prompt]  // « -- » : un texte qui commence par « - » n'est pas lu comme une option
             p.currentDirectoryURL = FileManager.default.temporaryDirectory
             var env = ProcessInfo.processInfo.environment
             env["ENCOCHE_INTERNAL"] = "1"
@@ -116,6 +116,8 @@ enum Claude {
             p.standardError = FileHandle.nullDevice
             p.standardInput = FileHandle.nullDevice
             guard (try? p.run()) != nil else { return done([]) }
+            // Jamais plus de 90 s : sinon l'action resterait « en cours » pour toujours.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 90) { if p.isRunning { p.terminate() } }
             let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             p.waitUntilExit()
             done(stream ? text.split(separator: "\n").map(String.init) : [text.trimmingCharacters(in: .whitespacesAndNewlines)])

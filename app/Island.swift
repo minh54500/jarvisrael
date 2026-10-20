@@ -1590,11 +1590,19 @@ private struct TextAIPanel: View {
 /// Miroir : la caméra (en miroir) pour vérifier sa tête avant une visio. Éteinte dès que l'encoche se ferme.
 private struct MirrorPanel: View {
     @ObservedObject var store: Store
+    @ObservedObject var camera = CameraAccess.shared
 
     var body: some View {
         Card {
             VStack(alignment: .leading, spacing: 8) {
                 DevSwitch(store: store)
+                if camera.denied {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("La caméra est refusée pour Encoche.").font(Fonts.lead)
+                        Text("Autorise-la dans Réglages Système → Confidentialité et sécurité → Caméra.").font(Fonts.label).foregroundStyle(Color.muted)
+                        Button("Ouvrir les Réglages") { camera.openSettings() }.buttonStyle(Pill(primary: true))
+                    }
+                } else {
                 HStack(alignment: .top, spacing: 14) {
                     MirrorView()
                         .frame(width: 256, height: 144)
@@ -1605,6 +1613,7 @@ private struct MirrorPanel: View {
                         Text("La caméra s'éteint dès que l'encoche se ferme.").font(Fonts.label).foregroundStyle(Color.muted)
                         Text("Première fois : autorise la caméra pour Encoche.").font(Fonts.caption).foregroundStyle(Color.faint)
                     }
+                }
                 }
             }
             .padding(.leading, 100)

@@ -33,6 +33,8 @@ cat > $APP/Contents/Info.plist <<EOF
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
+  <key>EncocheCommit</key><string>$(git rev-parse HEAD 2>/dev/null)</string>
+  <key>EncocheSource</key><string>$PWD</string>
   <key>NSCameraUsageDescription</key><string>Encoche affiche ta caméra en miroir quand tu ouvres le Miroir, pour vérifier ta tête avant une visio.</string>
   <key>NSBluetoothAlwaysUsageDescription</key><string>Encoche affiche la batterie de tes écouteurs (AirPods…) quand ils se connectent.</string>
   <key>NSMicrophoneUsageDescription</key><string>Encoche t'écoute quand tu dictes un message à Claude.</string>
