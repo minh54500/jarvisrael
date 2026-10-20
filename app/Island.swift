@@ -114,6 +114,18 @@ struct MinisView: View {
         Canvas { [frame] ctx, size in
             _ = frame
             guard store.mode == .compact else { return }
+            // Claude suit un plan : son avancement (anneau + « 3/7 ») remplace les mini-bonshommes.
+            if let p = store.activePlan {
+                let c = CGPoint(x: 15, y: size.height / 2), r = 6.5
+                ctx.stroke(Path(ellipseIn: CGRect(cx: c.x, cy: c.y, w: 2 * r, h: 2 * r)), with: .color(.white.opacity(0.16)), lineWidth: 2.2)
+                var arc = Path()
+                arc.addArc(center: c, radius: r, startAngle: .degrees(-90),
+                           endAngle: .degrees(-90 + 360 * Double(p.done) / Double(max(1, p.total))), clockwise: false)
+                ctx.stroke(arc, with: .color(.success), style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+                ctx.draw(Text("\(p.done)/\(p.total)").font(.system(size: 10.5, weight: .semibold)).monospacedDigit()
+                    .foregroundColor(Color.soft), at: CGPoint(x: 36, y: size.height / 2))
+                return
+            }
             let list = Array(store.sessions.prefix(4))
             guard !list.isEmpty else { return }
             let now = CACurrentMediaTime(), sp = 6.0
@@ -246,6 +258,8 @@ struct IslandContent: View {
                 case .music: MusicPanel(store: store)
                 case .dev: DevPanel(store: store)
                 case .care: CarePanel(store: store)
+                case .todos: TodosPanel(store: store)
+                case .friends: FriendsPanel(store: store)
                 }
             }
             .id(store.view)
@@ -301,15 +315,17 @@ struct IslandContent: View {
 private struct Tabs: View {
     @ObservedObject var store: Store
     @ObservedObject var spotify = Spotify.shared
+    @ObservedObject var friends = Friends.shared
     @Namespace private var ns
 
-    private enum Tab { case claude, music, shelf, dev }
+    private enum Tab { case claude, music, shelf, dev, friends }
 
     private var current: Tab {
         switch store.view {
         case .music: .music
         case .shelf: .shelf
         case .dev: .dev
+        case .friends: .friends
         default: .claude
         }
     }
@@ -324,6 +340,8 @@ private struct Tabs: View {
             item(.shelf, icon: store.shelf.isEmpty ? "tray" : "tray.full.fill", title: "Étagère",
                  badge: store.shelf.isEmpty ? nil : "\(store.shelf.count)", live: false) { store.goTo(.shelf) }
             item(.dev, icon: "terminal", title: "Dev", badge: nil, live: false) { store.goTo(.dev) }
+            let online = friends.list.filter(\.online).count
+            item(.friends, icon: "person.2.fill", title: "Potes", badge: online > 0 ? "\(online)" : nil, live: false) { store.goTo(.friends) }
         }
         .animation(.spring(response: 0.34, dampingFraction: 0.8), value: current)
     }
@@ -342,7 +360,7 @@ private struct Tabs: View {
             .overlay(alignment: .topTrailing) {
                 if live && tab == .claude && !active { Circle().fill(Color.success).frame(width: 5, height: 5).offset(x: 4, y: -2) }
             }
-            .padding(.horizontal, active ? 10 : 8)
+            .padding(.horizontal, active ? 9 : 6)
             .frame(height: 24)
             .background {
                 if active { Capsule().fill(.white.opacity(0.13)).matchedGeometryEffect(id: "tab", in: ns) }
@@ -533,7 +551,10 @@ private struct OverviewPanel: View {
                             .transition(.opacity)
                     } else {
                         VStack(alignment: .leading, spacing: 4) {
-                            let lines = Array((store.focused?.history ?? []).suffix(2))
+                            // Avec un plan, la ligne du haut devient son avancement (clic : la liste complète).
+                            let plan = store.focused?.plan
+                            if let plan { PlanLine(store: store, done: plan.done, total: plan.total) }
+                            let lines = Array((store.focused?.history ?? []).suffix(plan == nil ? 2 : 1))
                             ForEach(Array(lines.enumerated()), id: \.offset) { i, line in
                                 let current = i == lines.count - 1
                                 Text(current ? (store.focused?.line ?? line) : line)
@@ -1316,6 +1337,185 @@ private struct CarePanel: View {
         case .water: "#38BDF8"
         case .night: "#6366F1"
         case .battery, .heat: "#F4505E"
+        }
+    }
+}
+
+/// « ▰▰▰▱▱ 3/7 · Écrit les tests » : l'avancement du plan de Claude, clic pour la liste.
+private struct PlanLine: View {
+    @ObservedObject var store: Store
+    let done: Int
+    let total: Int
+
+    var body: some View {
+        Button { store.goTo(.todos) } label: {
+            HStack(spacing: 7) {
+                GeometryReader { g in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(.white.opacity(0.1))
+                        Capsule().fill(Color.success).frame(width: max(3, g.size.width * Double(done) / Double(max(1, total))))
+                    }
+                }
+                .frame(width: 34, height: 4)
+                Text("\(done)/\(total)").font(Fonts.caption.weight(.semibold)).monospacedDigit().foregroundStyle(Color.soft)
+                Text(store.focused?.currentTodo?.activeForm ?? (done == total ? "Plan terminé" : "Plan de Claude"))
+                    .font(Fonts.label).foregroundStyle(Color.muted).lineLimit(1)
+                Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).foregroundStyle(Color.faint)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(HoverDim())
+        .help("Voir la liste des tâches de Claude")
+    }
+}
+
+/// Le plan de Claude : ses tâches, cochées au fur et à mesure.
+private struct TodosPanel: View {
+    @ObservedObject var store: Store
+
+    var body: some View {
+        Card(wash: Color(hex: "#34D399", 0.22)) {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack {
+                    Who(session: store.focused, suffix: "plan de Claude")
+                    Spacer()
+                    if let p = store.focused?.plan {
+                        Text("\(p.done)/\(p.total)").font(Fonts.labelBold).monospacedDigit().foregroundStyle(Color.soft)
+                    }
+                }
+                if let todos = store.focused?.todos, !todos.isEmpty {
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            ForEach(Array(todos.enumerated()), id: \.offset) { _, t in TodoRow(todo: t) }
+                        }
+                    }
+                } else {
+                    Spacer(minLength: 0)
+                    Text("Pas de plan pour l'instant.").font(Fonts.lead)
+                    Text("Quand Claude découpe une demande en étapes, elles s'affichent ici.").font(Fonts.label).foregroundStyle(Color.muted)
+                    Spacer(minLength: 0)
+                }
+            }
+            .padding(.leading, 100)
+            .padding(.trailing, 16)
+            .padding(.vertical, 12)
+        }
+    }
+}
+
+private struct TodoRow: View {
+    let todo: Todo
+
+    var body: some View {
+        let done = todo.status == "completed", now = todo.status == "in_progress"
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Group {
+                if done { Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.success) }
+                else if now { PulseDot(color: .success).frame(width: 12) }
+                else { Image(systemName: "circle").foregroundStyle(Color.faint) }
+            }
+            .font(.system(size: 11, weight: .semibold))
+            .frame(width: 14)
+            Text(now && !todo.activeForm.isEmpty ? todo.activeForm : todo.content)
+                .font(now ? Fonts.lead : Fonts.label)
+                .foregroundStyle(done ? Color.faint : now ? Color.ink : Color.soft)
+                .strikethrough(done, color: Color.faint)
+                .lineLimit(1)
+        }
+    }
+}
+
+/// Entre potes : les bonshommes du groupe, leur humeur ; un clic envoie un cœur.
+private struct FriendsPanel: View {
+    @ObservedObject var store: Store
+    @ObservedObject var friends = Friends.shared
+
+    var body: some View {
+        Card(wash: Color(hex: "#F472B6", 0.24)) {
+            Group {
+                if !friends.configured {
+                    HStack(spacing: 16) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            big("Joue avec tes potes.")
+                            sub("Crée un groupe, donne-leur le code : vous verrez vos bonshommes ici.")
+                        }
+                        Spacer()
+                        Button("Configurer") { SettingsWindow.show() }.buttonStyle(Pill(primary: true))
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(friends.notice ?? (friends.list.isEmpty ? "Personne pour l'instant : donne le code du groupe à tes potes."
+                                                                    : "Clique sur un pote pour lui envoyer un cœur."))
+                            .font(Fonts.label.weight(friends.notice == nil ? .regular : .medium))
+                            .foregroundStyle(friends.notice == nil ? Color.muted : Color(hex: "#FF9ECF"))
+                            .lineLimit(1)
+                            .animation(.easeOut(duration: 0.2), value: friends.notice)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(friends.list) { f in FriendTile(friend: f) }
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.leading, 100)
+            .padding(.trailing, 14)
+            .padding(.vertical, 12)
+        }
+    }
+}
+
+private struct FriendTile: View {
+    let friend: Friends.Friend
+    @State private var hover = false
+
+    var body: some View {
+        VStack(spacing: 3) {
+            TimelineView(.animation(minimumInterval: 1.0 / 30)) { tl in
+                Canvas { ctx, size in
+                    _ = tl.date
+                    friend.mochi.update(CACurrentMediaTime())
+                    friend.mochi.draw(ctx, cx: size.width / 2, cy: size.height / 2 + 4, hb: 28)
+                }
+            }
+            .frame(width: 84, height: 58)
+            .opacity(friend.online ? 1 : 0.45)
+            Text(friend.name).font(Fonts.labelBold).lineLimit(1)
+            Text(friend.online ? label(friend.state) : "hors ligne")
+                .font(Fonts.caption)
+                .foregroundStyle(friend.online ? Color(hex: STYLES[friend.state]?.col ?? "#9A9FA8") : Color.faint)
+                .lineLimit(1)
+        }
+        .frame(width: 92)
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: Radius.item, style: .continuous).fill(.white.opacity(hover ? 0.09 : 0.03)))
+        .overlay(alignment: .topTrailing) {
+            if hover {
+                Button { Friends.shared.poke(friend, "wave") } label: { Image(systemName: "hand.wave.fill").font(.system(size: 10, weight: .semibold)) }
+                    .buttonStyle(MiniIcon())
+                    .help("Faire coucou à \(friend.name)")
+                    .accessibilityLabel("Faire coucou à \(friend.name)")
+            }
+        }
+        .contentShape(Rectangle())
+        .onHover { hover = $0 }
+        .onTapGesture { Friends.shared.poke(friend, "heart") }
+        .contextMenu {
+            Button("Envoyer un cœur") { Friends.shared.poke(friend, "heart") }
+            Button("Faire coucou") { Friends.shared.poke(friend, "wave") }
+        }
+        .help("Envoyer un cœur à \(friend.name)")
+        .accessibilityLabel("\(friend.name), \(friend.online ? label(friend.state) : "hors ligne")")
+    }
+
+    private func label(_ s: BotState) -> String {
+        switch s {
+        case .working: "Claude travaille"
+        case .approval: "attend une autorisation"
+        case .waiting: "attend sa réponse"
+        case .error: "a un souci"
+        case .sleeping: "dort"
+        case .finished, .idle, .dizzy: friend.sessions > 0 ? "au repos" : "tranquille"
         }
     }
 }

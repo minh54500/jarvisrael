@@ -20,6 +20,19 @@ struct Session: Identifiable {
     var transcriptOffset: UInt64 = 0  // sa taille au début de la demande
     var touched: [String] = []  // fichiers modifiés pendant cette demande
     var turn: Turn?         // bilan de la dernière demande terminée
+    var todos: [Todo] = []  // la liste de tâches de Claude (outil TodoWrite)
+
+    var plan: (done: Int, total: Int)? {
+        todos.isEmpty ? nil : (todos.filter { $0.status == "completed" }.count, todos.count)
+    }
+    var currentTodo: Todo? { todos.first { $0.status == "in_progress" } }
+}
+
+/// Une tâche de la liste de Claude : « pending », « in_progress » ou « completed ».
+struct Todo: Equatable {
+    var content: String
+    var status: String
+    var activeForm: String
 }
 
 /// Ce que Claude a fait pendant une demande : fichiers modifiés, durée, lignes (git).
@@ -87,7 +100,7 @@ struct Permission: Identifiable {
 }
 
 enum Mode { case hidden, compact, expanded }
-enum Panel: Equatable { case greeting, overview, empty, approval, finished, error, upload, choose, converting, result, shelf, music, dev, care }
+enum Panel: Equatable { case greeting, overview, empty, approval, finished, error, upload, choose, converting, result, shelf, music, dev, care, todos, friends }
 
 private let PALETTE = ["#FF6B5B", "#2DD4A7", "#F7B32B", "#A78BFA", "#38BDF8", "#F472B6"]
 
@@ -165,6 +178,8 @@ final class Store: ObservableObject {
         case .error, .choose: 176
         case .dev: 206
         case .care: 164
+        case .todos: 216
+        case .friends: 184
         case .upload, .shelf, .music: 176
         case .converting, .result: 150
         }
@@ -609,9 +624,7 @@ final class Store: ObservableObject {
     /// Un rappel (pause, eau, nuit, batterie, chaleur). Refusé (false) si on est occupé :
     /// il reviendra au prochain passage.
     func remind(_ r: Reminder) -> Bool {
-        let busyView: [Panel] = [.approval, .choose, .converting, .upload]
-        guard permissions.isEmpty, !composing, !sending, !fileDragging, !Voice.shared.listening,
-              !(mode == .expanded && (hovering || busyView.contains(view))) else { return false }
+        guard !busy else { return false }
         reminder = r
         switch r {
         case .pause, .night: mochi.emote(.yawn, 2.4)
@@ -736,10 +749,15 @@ final class Store: ObservableObject {
             }
             s.touched = []
             s.turn = nil
+            if let p = s.plan, p.done == p.total { s.todos = [] }  // plan fini : la nouvelle demande repart à zéro
             s.line = "« \(short(ev["prompt"] as? String ?? "", 70)) »"
             push(&s)
         case "PreToolUse":
             if s.state != .approval { s.state = .working }
+            if ev["tool_name"] as? String == "TodoWrite", let list = (ev["tool_input"] as? [String: Any])?["todos"] as? [[String: Any]] {
+                s.todos = list.map { Todo(content: $0["content"] as? String ?? "", status: $0["status"] as? String ?? "pending",
+                                          activeForm: $0["activeForm"] as? String ?? "") }
+            }
             s.line = describe(ev["tool_name"] as? String ?? "", ev["tool_input"] as? [String: Any] ?? [:])
             push(&s)
         case "PostToolUse", "PostToolUseFailure":
@@ -974,6 +992,33 @@ final class Store: ObservableObject {
         var st = order.first { states.contains($0) } ?? .idle
         if st == .idle && !sessions.isEmpty && Date().timeIntervalSince(lastActivity) > 600 { st = .sleeping }
         mochi.setState(st)
+        Friends.shared.share(st, sessions: sessions.count)
+    }
+
+    /// Le plan en cours le plus récent (pour l'encoche fermée) : une session qui travaille, tâches pas finies.
+    var activePlan: (done: Int, total: Int)? {
+        sessions.filter { $0.state == .working || $0.state == .approval || $0.state == .waiting }
+            .sorted { $0.updated > $1.updated }
+            .compactMap(\.plan).first { $0.done < $0.total }
+    }
+
+    /// Un pote m'envoie un cœur ou un coucou : le bonhomme réagit, et l'onglet Potes s'ouvre si on n'est pas occupé.
+    func poked(heart: Bool) {
+        mochi.emote(heart ? .love : .wink, 2.2)
+        Sound.shared.play(heart ? "love" : "peek")
+        guard !busy else { return }
+        show(.friends, sound: nil)
+        pinUntil = Date().addingTimeInterval(4)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.2) {
+            if self.view == .friends && !self.hovering { self.collapse() }
+        }
+    }
+
+    /// On écrit, on autorise, on dépose un fichier… : pas le moment d'ouvrir autre chose.
+    private var busy: Bool {
+        let busyView: [Panel] = [.approval, .choose, .converting, .upload]
+        return !permissions.isEmpty || composing || sending || fileDragging || Voice.shared.listening
+            || (mode == .expanded && (hovering || busyView.contains(view)))
     }
 
     var focused: Session? { sessions.first { $0.id == focus } ?? sessions.first }

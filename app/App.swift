@@ -115,6 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = editMenu()  // ⌘C, ⌘V… dans les champs de la fenêtre Réglages
         _ = ClipHistory.shared  // l'historique du presse-papiers commence maintenant
         Care.shared.start()
+        Friends.shared.restart()
 
         // Menu ouvert (modèle, réglages) : l'encoche ne se referme pas sous lui.
         for (name, on) in [(NSMenu.didBeginTrackingNotification, true), (NSMenu.didEndTrackingNotification, false)] {

@@ -36,6 +36,9 @@ private struct SettingsView: View {
     @AppStorage("ntfy.topic") private var topic = ""
     @AppStorage("ntfy.away") private var away = true
     @State private var tested = false
+    @AppStorage("friends.on") private var friendsOn = false
+    @AppStorage("friends.name") private var friendsName = ""
+    @AppStorage("friends.group") private var friendsGroup = ""
 
     var body: some View {
         Form {
@@ -94,6 +97,29 @@ private struct SettingsView: View {
                      + "choisis-le difficile à deviner. Seuls le nom du projet et l'état sont envoyés, jamais tes messages.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+
+            Section("Entre potes") {
+                Toggle("Partager mon bonhomme avec mes potes", isOn: $friendsOn)
+                TextField("Ton pseudo", text: $friendsName, prompt: Text("Ton prénom ou un surnom"))
+                HStack {
+                    TextField("Code du groupe", text: $friendsGroup).textFieldStyle(.roundedBorder)
+                    Button("Créer") { friendsGroup = Friends.newGroup(); friendsOn = true }
+                    Button("Copier") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(friendsGroup, forType: .string)
+                    }
+                    .disabled(friendsGroup.isEmpty)
+                }
+                Text("Crée un groupe et envoie le code à tes potes : ils le collent ici. Seuls ton pseudo et l'humeur de ton "
+                     + "bonhomme sont partagés (jamais tes projets ni tes messages), via ntfy.sh.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .onChange(of: friendsOn) { _, on in
+                if on && friendsName.isEmpty { friendsName = NSFullUserName().components(separatedBy: " ").first ?? "" }
+                Friends.shared.restart()
+            }
+            .onChange(of: friendsGroup) { _, _ in Friends.shared.restartSoon() }
+            .onChange(of: friendsName) { _, _ in Friends.shared.restartSoon() }
 
             Section("Général") {
                 Toggle("Sons", isOn: Binding(get: { Sound.shared.on }, set: { Sound.shared.on = $0; store.objectWillChange.send() }))
