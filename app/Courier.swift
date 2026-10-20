@@ -102,13 +102,13 @@ enum Courier {
             return .failed(undone ? "Il y a déjà un brouillon dans Claude : rien n'a été envoyé."
                                   : "Il y avait un brouillon dans Claude : ton message a été ajouté à la suite, rien n'a été envoyé.")
         }
+        // Parti = notre texte a quitté le champ (vide, il renvoie de nouveau son texte d'invite).
+        let gone = { !normalized(string(field, kAXValueAttribute)).contains(mine) }
         if let button = sendButton(near: field), (attribute(button, kAXEnabledAttribute) as? Bool) ?? false {
             AXUIElementPerformAction(button, kAXPressAction as CFString)
-        } else {
-            press(app.processIdentifier, 36)  // Entrée
         }
-        return wait(2.5, { normalized(string(field, kAXValueAttribute)).isEmpty })
-            ? .sent : .failed("Le texte est dans Claude, mais pas parti : appuie sur Entrée.")
+        if !wait(0.8, gone) { press(app.processIdentifier, 36) }  // Entrée, envoyée à VS Code seul
+        return wait(2, gone) ? .sent : .failed("Le texte est dans Claude, mais pas parti : appuie sur Entrée.")
     }
 
     /// Le champ « Message input » de l'onglet qui a le focus. On cherche seulement dans la page
