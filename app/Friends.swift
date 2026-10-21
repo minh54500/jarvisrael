@@ -62,7 +62,6 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
     @Published private(set) var watched = Set(UserDefaults.standard.stringArray(forKey: "friends.watch") ?? [])
     private var arrived: [String: Date] = [:]
     private var connectedAt = Date()
-    private var musicSent: (id: String, at: Date)?
 
     @Published private(set) var list: [Friend] = []
     @Published private(set) var notice: String?
@@ -144,18 +143,18 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
             saveChat()
         }
         guard configured else { return }
-        presence = .active
-        presenceSince = Date()
+        // La vraie présence (pas « présent » d'office) : relancer l'app pendant une pause n'est pas une arrivée.
+        let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+        presence = idle < 180 ? .active : .away
+        presenceSince = Date().addingTimeInterval(presence == .away ? -idle : 0)
         connect()
         publish(force: true)
         heartbeat = Timer.scheduledTimer(withTimeInterval: 20 * 60, repeats: true) { _ in
             MainActor.assumeIsolated { Friends.shared.publish(force: true) }
         }
         presenceTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
-            MainActor.assumeIsolated {
-                Friends.shared.checkPresence()
-                Friends.shared.checkMusic()
-            }
+            // (Le morceau en cours part avec le prochain statut : rien de forcé, ntfy gratuit limite les messages.)
+            MainActor.assumeIsolated { Friends.shared.checkPresence() }
         }
     }
 
@@ -303,15 +302,21 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         saveChat()
     }
 
-    /// Le chat est sous mes yeux : je dis jusqu'où j'ai lu (au plus toutes les 20 s, seulement s'il y a du nouveau).
+    /// Le chat est sous mes yeux : je dis jusqu'où j'ai lu, une fois la conversation calme (5 s sans nouveau
+    /// message) pour ne pas user les messages gratuits de ntfy, et seulement si le dernier message n'est pas le mien.
     private func sendSeen() {
-        guard configured, Store.shared.chatVisible, let last = chat.last(where: { !$0.mine }), last.at > seenSent,
-              Date().timeIntervalSince(lastSeenPost) > 20 else { return }
-        seenSent = last.at
-        lastSeenPost = Date()
-        post(["kind": "seen", "at": last.at.timeIntervalSince1970])
+        seenWork?.cancel()
+        let work = DispatchWorkItem {
+            let fr = Friends.shared
+            guard fr.configured, Store.shared.chatVisible, fr.chat.last?.mine == false,
+                  let last = fr.chat.last(where: { !$0.mine }), last.at > fr.seenSent else { return }
+            fr.seenSent = last.at
+            fr.post(["kind": "seen", "at": last.at.timeIntervalSince1970])
+        }
+        seenWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
     }
-    private var lastSeenPost = Date.distantPast
+    private var seenWork: DispatchWorkItem?
 
     /// Qui a vu mon dernier message.
     func seenNames(after date: Date) -> [String] {
@@ -322,9 +327,13 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
 
     static let noteLimit = 40
     var note: String { String((UserDefaults.standard.string(forKey: "friends.note") ?? "").prefix(Self.noteLimit)) }
+    /// Le statut en cours d'écriture (nil hors écriture) : gardé ici, il survit à la fermeture de l'encoche.
+    @Published var noteDraft: String?
 
     func setNote(_ text: String) {
-        let t = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.noteLimit))
+        var t = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.noteLimit))
+        while t.utf8.count > 160 { t.removeLast() }  // des emoji composés pèsent lourd : le statut reste petit
+        noteDraft = nil
         UserDefaults.standard.set(t, forKey: "friends.note")
         objectWillChange.send()
         changed()
@@ -338,12 +347,16 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         return (String((t.artist.isEmpty ? t.name : "\(t.name) — \(t.artist)").prefix(80)), t.id)
     }
 
-    /// Un nouveau morceau : les potes le voient, mais au plus toutes les 10 min (ntfy gratuit limite les messages).
-    private func checkMusic() {
-        guard configured, let m = music, m.id != musicSent?.id,
-              Date().timeIntervalSince(musicSent?.at ?? .distantPast) > 10 * 60 else { return }
-        musicSent = (m.id, Date())
-        publish(force: true)
+    nonisolated static func trackID(_ s: String?) -> String? {
+        guard let s, s.range(of: "^spotify:track:[A-Za-z0-9]{22}$", options: .regularExpression) != nil else { return nil }
+        return s
+    }
+
+    private func arrival(_ id: String, _ name: String, _ color: String?, _ aura: String) {
+        guard watched.contains(id), Date().timeIntervalSince(connectedAt) > 90,
+              Date().timeIntervalSince(arrived[id] ?? .distantPast) > 30 * 60 else { return }
+        arrived[id] = Date()
+        Store.shared.friendArrived(name, color: color.flatMap { $0.isEmpty ? nil : $0 } ?? aura)
     }
 
     func toggleWatch(_ f: Friend) {
@@ -439,12 +452,10 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
             let tint = (color?.isEmpty ?? true) ? nil : color
             if let f = list.first(where: { $0.id == id }) {
                 // Arrivé sur son Mac : il était hors ligne, ou absent depuis plus de 30 min.
+                // (Hors ligne depuis moins de 5 min : il a juste relancé l'app ou fermé le capot une minute.)
                 let wasHere = f.online && (f.presence == .active || Date().timeIntervalSince(f.since) < 30 * 60)
-                if fresh && !wasHere && presence == .active && watched.contains(id) && Date().timeIntervalSince(connectedAt) > 90
-                    && Date().timeIntervalSince(arrived[id] ?? .distantPast) > 30 * 60 {
-                    arrived[id] = Date()
-                    Store.shared.friendArrived(who, color: (m["color"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? f.mochi.skin.aura)
-                }
+                    || f.presence == .off && Date().timeIntervalSince(f.since) < 5 * 60
+                if fresh && !wasHere && presence == .active { arrival(id, who, m["color"] as? String, f.mochi.skin.aura) }
                 f.name = who
                 if let skin, skin != f.mochi.skin.id { f.mochi.skin = Skin.named(skin) }
                 f.mochi.tint = tint
@@ -456,7 +467,7 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
                 f.dnd = m["dnd"] as? Bool ?? false
                 f.note = String((m["note"] as? String ?? "").prefix(Self.noteLimit))
                 f.music = (m["music"] as? String).map { String($0.prefix(80)) }
-                f.musicID = (m["musicID"] as? String).flatMap { $0.hasPrefix("spotify:track:") ? $0 : nil }
+                f.musicID = Self.trackID(m["musicID"] as? String)
                 if f.state != state { f.state = state; f.mochi.setState(state) }
             } else {
                 let f = Friend(id: id, name: who, state: state, sessions: sessions, seen: at, presence: presence,
@@ -465,8 +476,10 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
                 f.dnd = m["dnd"] as? Bool ?? false
                 f.note = String((m["note"] as? String ?? "").prefix(Self.noteLimit))
                 f.music = (m["music"] as? String).map { String($0.prefix(80)) }
-                f.musicID = (m["musicID"] as? String).flatMap { $0.hasPrefix("spotify:track:") ? $0 : nil }
+                f.musicID = Self.trackID(m["musicID"] as? String)
                 list.append(f)
+                // Pas vu depuis plus de 6 h (le matin, après la nuit) : sa première nouvelle est une arrivée.
+                if fresh && presence == .active { arrival(id, who, m["color"] as? String, f.mochi.skin.aura) }
             }
             list.sort { ($0.online ? 0 : 1, $0.name) < ($1.online ? 0 : 1, $1.name) }
             objectWillChange.send()

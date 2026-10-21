@@ -167,6 +167,7 @@ final class Store: ObservableObject {
     /// Du texte en cours dans un des champs (Claude, mini-terminal, chat).
     var typedSomething: Bool {
         [draft, Shell.shared.command, Friends.shared.draft].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            || Friends.shared.noteDraft.map { $0 != Friends.shared.note } ?? false
     }
 
     var pinned: Bool {

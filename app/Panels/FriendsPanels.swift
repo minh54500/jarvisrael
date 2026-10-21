@@ -8,8 +8,6 @@ struct FriendsPanel: View {
     @ObservedObject var store: Store
     @ObservedObject var friends = Friends.shared
     @ObservedObject var cam = FriendCam.shared
-    @State private var editingNote = false
-    @State private var noteDraft = ""
     @State private var focusNote = false
 
     var body: some View {
@@ -26,7 +24,7 @@ struct FriendsPanel: View {
                     }
                 } else {
                     VStack(alignment: .leading, spacing: 7) {
-                        if editingNote { noteEditor } else {
+                        if friends.noteDraft != nil { noteEditor } else {
                         HStack(spacing: 8) {
                             Segments(left: "Potes", right: friends.unread > 0 ? "Chat \(friends.unread)" : "Chat", rightOn: store.friendsShowsChat) { on in
                                 Sound.shared.play("tick")
@@ -61,9 +59,8 @@ struct FriendsPanel: View {
                             Spacer(minLength: 0)
                             // Mon statut, visible sous mon bonhomme chez les potes.
                             Button {
-                                noteDraft = friends.note
+                                friends.noteDraft = friends.note
                                 focusNote = true
-                                editingNote = true
                             } label: {
                                 HStack(spacing: 4) {
                                     Image(systemName: "text.bubble").font(.system(size: 10, weight: .semibold))
@@ -73,22 +70,7 @@ struct FriendsPanel: View {
                             }
                             .buttonStyle(Chip())
                             .help("Ton statut, visible sous ton bonhomme chez tes potes")
-                            // Ma caméra : partagée ou non, en un clic (le même réglage que dans les Réglages).
-                            let inCall = !cam.calls.isEmpty, on = cam.sharing || inCall
-                            Button {
-                                if inCall { return cam.hangUp() }  // en appel, la caméra filme : le bouton raccroche
-                                cam.setSharing(!cam.sharing)
-                                Sound.shared.play("tick")
-                                friends.say(cam.sharing ? "Caméra partagée : tes potes peuvent te voir" : "Caméra coupée")
-                            } label: {
-                                Image(systemName: on ? "video.fill" : "video.slash.fill")
-                                    .font(.system(size: 11.5, weight: .semibold))
-                                    .foregroundStyle(on ? Color(hex: "#FF9ECF") : Color.muted)
-                            }
-                            .buttonStyle(IconButton())
-                            .help(inCall ? "Caméra ensemble en cours : clic pour raccrocher"
-                                  : cam.sharing ? "Ta caméra est partagée : clic pour la couper" : "Partager ta caméra avec tes potes")
-                            .accessibilityLabel(inCall ? "Raccrocher" : cam.sharing ? "Couper le partage de ma caméra" : "Partager ma caméra")
+                            camButton
                         }
                         .animation(.easeOut(duration: 0.2), value: friends.notice)
                         }
@@ -119,23 +101,53 @@ struct FriendsPanel: View {
 }
 
 extension FriendsPanel {
-    /// Écrire son statut, à la place de l'en-tête (Entrée valide, vide = effacé).
+    /// Écrire son statut, à la place de l'en-tête (Entrée valide, vide = effacé). Le bouton caméra reste là : il
+    /// dit si ma caméra filme, et raccroche pendant une caméra ensemble.
     var noteEditor: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "text.bubble.fill").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color(hex: "#FF9ECF"))
-            ComposeField(text: $noteDraft, placeholder: "Ton statut (ex. en call client) · Entrée pour valider",
-                         onSubmit: { friends.setNote(noteDraft); editingNote = false },
-                         onEditing: { store.setComposing($0) }, focus: focusNote, onFocused: { focusNote = false })
-                .frame(height: 18)
-            Text("\(Friends.noteLimit - noteDraft.count)").font(Fonts.caption).monospacedDigit()
-                .foregroundStyle(noteDraft.count > Friends.noteLimit ? Color.danger : Color.faint)
-            Button("OK") { friends.setNote(noteDraft); editingNote = false }.buttonStyle(Chip())
-            Button("Annuler") { editingNote = false; store.setComposing(false) }.buttonStyle(Chip())
+        let draft = friends.noteDraft ?? ""
+        return HStack(spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "text.bubble.fill").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color(hex: "#FF9ECF"))
+                ComposeField(text: Binding(get: { friends.noteDraft ?? "" }, set: { friends.noteDraft = $0 }),
+                             placeholder: "Ton statut (ex. en call client) · Entrée pour valider",
+                             onSubmit: { friends.setNote(friends.noteDraft ?? "") },
+                             onEditing: { editing in
+                                 store.setComposing(editing)
+                                 // Échap ou clic ailleurs sans rien changer : on referme l'éditeur.
+                                 if !editing && friends.noteDraft == friends.note { friends.noteDraft = nil }
+                             },
+                             focus: focusNote, onFocused: { focusNote = false })
+                    .frame(height: 18)
+                Text("\(Friends.noteLimit - draft.count)").font(Fonts.caption).monospacedDigit()
+                    .foregroundStyle(draft.count > Friends.noteLimit ? Color.danger : Color.faint)
+                Button("OK") { friends.setNote(draft) }.buttonStyle(Chip())
+                Button("Annuler") { friends.noteDraft = nil; store.setComposing(false) }.buttonStyle(Chip())
+            }
+            .padding(.leading, 11)
+            .padding(.trailing, 5)
+            .padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(.white.opacity(0.1)))
+            camButton
         }
-        .padding(.leading, 11)
-        .padding(.trailing, 5)
-        .padding(.vertical, 4)
-        .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(.white.opacity(0.1)))
+    }
+
+    /// Ma caméra : partagée ou non, en un clic (le même réglage que dans les Réglages) ; en appel, elle raccroche.
+    var camButton: some View {
+        let inCall = !cam.calls.isEmpty, on = cam.sharing || inCall
+        return Button {
+            if inCall { return cam.hangUp() }  // en appel, la caméra filme : le bouton raccroche
+            cam.setSharing(!cam.sharing)
+            Sound.shared.play("tick")
+            friends.say(cam.sharing ? "Caméra partagée : tes potes peuvent te voir" : "Caméra coupée")
+        } label: {
+            Image(systemName: on ? "video.fill" : "video.slash.fill")
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(on ? Color(hex: "#FF9ECF") : Color.muted)
+        }
+        .buttonStyle(IconButton())
+        .help(inCall ? "Caméra ensemble en cours : clic pour raccrocher"
+              : cam.sharing ? "Ta caméra est partagée : clic pour la couper" : "Partager ta caméra avec tes potes")
+        .accessibilityLabel(inCall ? "Raccrocher" : cam.sharing ? "Couper le partage de ma caméra" : "Partager ma caméra")
     }
 }
 
@@ -202,7 +214,7 @@ struct ChatView: View {
                     .padding(.horizontal, 2)
                 }
                 .onAppear { reader.scrollTo("fin", anchor: .bottom); friends.markRead() }
-                .onChange(of: friends.chat.count) { _, _ in
+                .onChange(of: friends.chat.last?.id) { _, _ in  // (pas `count` : le chat plafonné à 150 ne bouge plus)
                     withAnimation(.easeOut(duration: 0.2)) { reader.scrollTo("fin", anchor: .bottom) }
                     friends.markRead()
                 }

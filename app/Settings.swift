@@ -309,8 +309,9 @@ private struct SettingsView: View {
                 }
                 Toggle("Montrer à mes potes ce que j'écoute sur Spotify", isOn: $musicShare)
                     .onChange(of: musicShare) { _, _ in Friends.shared.skinChanged() }
-                Text("Crée un groupe et envoie le code à tes potes : ils le collent ici. Seuls ton pseudo et l'humeur de ton "
-                     + "bonhomme sont partagés (jamais tes projets ni tes messages), via ntfy.sh.")
+                Text("Crée un groupe et envoie le code à tes potes : ils le collent ici. Sont partagés, via ntfy.sh : ton pseudo, "
+                     + "ton bonhomme et son humeur, si tu es sur ton Mac, « ne pas déranger », ton statut, si ta caméra est partagée "
+                     + "et, si tu le coches, ce que tu écoutes. Jamais tes projets ni tes messages à Claude.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .onChange(of: friendsOn) { _, on in
