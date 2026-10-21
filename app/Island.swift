@@ -101,6 +101,7 @@ struct MochiView: View {
             store.mochi.draw(ctx, cx: size.width / 2, cy: size.height / 2, hb: size.height / 4)
         }
         .frame(width: side, height: side)
+        .opacity(slot.hb < 1 ? 0 : 1)
         .contentShape(Circle().inset(by: side * 0.3))
         .onTapGesture { store.mochiTapped() }
         .contextMenu { SettingsMenu(store: store) }

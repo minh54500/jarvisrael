@@ -50,9 +50,6 @@ struct FriendsPanel: View {
                                     ForEach(friends.list) { f in FriendTile(friend: f) }
                                 }
                             }
-                            // Onglet ouvert : on demande l'image de ceux qui partagent leur caméra.
-                            .onAppear { cam.setViewing(true) }
-                            .onDisappear { cam.setViewing(false) }
                         }
                     }
                 }
@@ -60,6 +57,44 @@ struct FriendsPanel: View {
             .padding(.leading, 100)
             .padding(.trailing, 14)
             .padding(.vertical, 11)
+        }
+        // Dans le chat, les caméras des potes prennent la place du bonhomme, à gauche.
+        .overlay(alignment: .leading) {
+            if friends.configured && store.friendsShowsChat { ChatCams().padding(.leading, 9) }
+        }
+        // Onglet Potes ouvert (vignettes ou chat) : on demande l'image de ceux qui partagent leur caméra.
+        .onAppear { cam.setViewing(true) }
+        .onDisappear { cam.setViewing(false) }
+    }
+}
+
+/// Les caméras des potes à gauche du chat : une grande, ou deux l'une sous l'autre.
+struct ChatCams: View {
+    @ObservedObject var friends = Friends.shared
+    @ObservedObject var frames = FriendCam.Frames.shared
+
+    var body: some View {
+        let live = friends.list.filter { frames.images[$0.id] != nil }
+        VStack(spacing: 8) {
+            ForEach(live.prefix(2)) { f in
+                VStack(spacing: 3) {
+                    if let image = frames.images[f.id] {
+                        Image(nsImage: image).resizable().interpolation(.medium).aspectRatio(contentMode: .fill)
+                            .frame(width: 84, height: live.count > 1 ? 63 : 84)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay(alignment: .topLeading) { Circle().fill(Color.danger).frame(width: 6, height: 6).padding(6) }
+                    }
+                    Text(f.name).font(Fonts.caption.weight(.semibold)).foregroundStyle(Color.soft).lineLimit(1)
+                }
+                .frame(width: 84)
+                .contentShape(Rectangle())
+                .onTapGesture { Friends.shared.poke(f, "heart") }
+                .help("\(f.name), en direct · clic : un cœur")
+                .accessibilityLabel("Caméra de \(f.name), en direct")
+            }
+            if live.count > 2 {
+                Text("+\(live.count - 2) en direct").font(Fonts.caption).foregroundStyle(Color.faint)
+            }
         }
     }
 }

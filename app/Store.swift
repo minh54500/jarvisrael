@@ -125,6 +125,8 @@ final class Store: ObservableObject {
             case .greeting: return (320, cardTop + 54, 58)
             case .upload: return (62, mid, 38)
             case .converting: return (54, mid, 30)
+            // Le chat des potes montre leurs caméras à la place du bonhomme.
+            case .friends where friendsShowsChat && !FriendCam.Frames.shared.images.isEmpty: return (60, mid, 0)
             default: return (60, mid, 40)
             }
         }
