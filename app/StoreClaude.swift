@@ -585,7 +585,7 @@ extension Store {
         case "iTerm.app": bundle = "com.googlecode.iterm2"
         default: bundle = "com.microsoft.VSCode"
         }
-        guard let app = ws.urlForApplication(withBundleIdentifier: bundle) else { return }
+        guard let app = bundle == ClaudeApp.bundle ? ClaudeApp.app : ws.urlForApplication(withBundleIdentifier: bundle) else { return }
         let urls = bundle == "com.microsoft.VSCode" ? [URL(fileURLWithPath: s.cwd)] : []
         ws.open(urls, withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
         // Une fois la bonne fenêtre devant (le lien va à la fenêtre active), on montre l'onglet.

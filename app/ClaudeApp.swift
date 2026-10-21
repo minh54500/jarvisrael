@@ -28,16 +28,26 @@ enum ClaudeApp {
         }
     }
 
-    static var installed: Bool { NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle) != nil }
+    /// L'app installée pour de vrai : pas la copie de l'installeur (.dmg encore ouvert) ni celle de la Corbeille,
+    /// que macOS choisirait sinon pour ouvrir les liens claude://.
+    static var app: URL? {
+        NSWorkspace.shared.urlsForApplications(withBundleIdentifier: bundle).first {
+            !$0.path.hasPrefix("/Volumes/") && !$0.path.contains("/.Trash/")
+        }
+    }
 
-    /// Faux si l'app n'est pas installée : l'encoche le dit et ouvre la page de téléchargement.
+    static var installed: Bool { app != nil }
+
+    /// Faux si l'app n'est pas installée : l'encoche dit quoi faire (finir l'installation, ou la télécharger).
     @discardableResult
     static func open(_ kind: Kind, prompt: String = "", folder: String? = nil) -> Bool {
-        guard installed else {
+        guard let app else {
+            let onInstaller = NSWorkspace.shared.urlsForApplications(withBundleIdentifier: bundle).contains { $0.path.hasPrefix("/Volumes/") }
             Store.shared.collapse()
             Store.shared.showToast(Toast(icon: "exclamationmark.triangle.fill", color: "#F7B32B", title: "App Claude",
-                                         text: "Pas installée sur ce Mac : je t'ouvre la page pour la télécharger."))
-            if let url = URL(string: "https://claude.ai/download") { NSWorkspace.shared.open(url) }
+                                         text: onInstaller ? "Pas encore installée : glisse Claude dans Applications (fenêtre de l'installeur)."
+                                                           : "Pas installée sur ce Mac : je t'ouvre la page pour la télécharger."))
+            if !onInstaller, let url = URL(string: "https://claude.ai/download") { NSWorkspace.shared.open(url) }
             return false
         }
         var query: [String] = []
@@ -45,7 +55,7 @@ enum ClaudeApp {
         if !text.isEmpty { query.append("q=" + encode(String(text.prefix(14_000)))) }  // l'app coupe vers 14 000 signes
         if let folder, kind == .code { query.append("folder=" + encode(folder)) }
         guard let url = URL(string: "claude://" + kind.rawValue + (query.isEmpty ? "" : "?" + query.joined(separator: "&"))) else { return false }
-        NSWorkspace.shared.open(url)
+        NSWorkspace.shared.open([url], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
         return true
     }
 
