@@ -3,9 +3,20 @@ import SwiftUI
 
 // Éléments communs des panneaux : cartes, boutons, pastilles, jauges, textes.
 
+private struct SectionTintKey: EnvironmentKey { static let defaultValue: Color? = nil }
+
+extension EnvironmentValues {
+    /// La couleur de la section ouverte (voir Store.sectionTint).
+    var sectionTint: Color? {
+        get { self[SectionTintKey.self] }
+        set { self[SectionTintKey.self] = newValue }
+    }
+}
+
 struct Card<Content: View>: View {
     var wash: Color? = nil
     @ViewBuilder var content: Content
+    @Environment(\.sectionTint) private var section
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
@@ -14,6 +25,9 @@ struct Card<Content: View>: View {
             .background {
                 ZStack {
                     Color.surface
+                    if let section {  // la teinte de la section, montant du bas
+                        LinearGradient(colors: [section.opacity(0.2), section.opacity(0.06)], startPoint: .bottom, endPoint: .top)
+                    }
                     if let wash {
                         RadialGradient(colors: [wash, .clear], center: UnitPoint(x: 0.5, y: 1.3), startRadius: 0, endRadius: 380)
                     }
@@ -21,7 +35,7 @@ struct Card<Content: View>: View {
                 .clipShape(shape)
             }
             // Liseré plus clair en haut : la carte semble éclairée par le dessus, comme du verre.
-            .overlay(shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.09), .white.opacity(0.02)],
+            .overlay(shape.strokeBorder(LinearGradient(colors: [(section ?? .white).opacity(section == nil ? 0.09 : 0.22), .white.opacity(0.02)],
                                                        startPoint: .top, endPoint: .bottom), lineWidth: 1))
     }
 }

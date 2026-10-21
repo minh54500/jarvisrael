@@ -20,6 +20,7 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         var seen: Date            // dernier message reçu de lui
         var presence: Presence
         var since: Date           // depuis quand il est dans cette présence
+        var cam = false           // partage sa caméra (voir FriendCam)
         let mochi: Mochi
 
         /// Hors ligne s'il l'a dit (veille, app quittée) ou sans nouvelles depuis 45 min (signe de vie toutes les 20).
@@ -117,6 +118,7 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         presenceTimer?.invalidate()
         list = []
         sent = nil
+        FriendCam.shared.closeAll()
         // Autre groupe : on repart d'un chat vide.
         if UserDefaults.standard.string(forKey: "friends.chatGroup") != group {
             UserDefaults.standard.set(group, forKey: "friends.chatGroup")
@@ -161,6 +163,7 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
     /// Veille ou app quittée : on le dit tout de suite (en attendant un peu que le message parte).
     func goOffline() {
         guard configured else { return }
+        FriendCam.shared.closeAll()
         presence = .off
         presenceSince = Date()
         let done = DispatchSemaphore(value: 0)
@@ -170,7 +173,7 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
     }
 
     private var signature: String {
-        "\(current.state.rawValue)|\(presence.rawValue)|\(Skin.current.id)|\(Skin.tint ?? "")|\(name)"
+        "\(current.state.rawValue)|\(presence.rawValue)|\(Skin.current.id)|\(Skin.tint ?? "")|\(name)|\(FriendCam.shared.sharing)"
     }
 
     /// Au plus un message toutes les 30 s (ntfy gratuit limite le nombre de messages par jour) :
@@ -195,7 +198,8 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
 
     private func status() -> [String: Any] {
         ["kind": "status", "state": current.state.rawValue, "sessions": current.sessions, "skin": Skin.current.id,
-         "color": Skin.tint ?? "", "presence": presence.rawValue, "since": presenceSince.timeIntervalSince1970]
+         "color": Skin.tint ?? "", "presence": presence.rawValue, "since": presenceSince.timeIntervalSince1970,
+         "cam": FriendCam.shared.sharing]
     }
 
     /// Un cœur (« heart ») ou un coucou (« wave ») au bonhomme d'un pote.
@@ -205,6 +209,12 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         post(["kind": "poke", "to": f.id, "emote": emote])
         Sound.shared.play("pop")
         say(emote == "heart" ? "Cœur envoyé à \(f.name) ✓" : "Coucou envoyé à \(f.name) ✓")
+    }
+
+    /// Les messages de la caméra entre potes (demande, description de connexion, arrêt), pour un seul pote.
+    func signal(_ fields: [String: Any]) {
+        guard configured else { return }
+        post(fields)
     }
 
     // MARK: Chat
@@ -339,13 +349,20 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
                 f.seen = at
                 f.presence = presence
                 f.since = since
+                f.cam = m["cam"] as? Bool ?? false
                 if f.state != state { f.state = state; f.mochi.setState(state) }
             } else {
-                list.append(Friend(id: id, name: who, state: state, sessions: sessions, seen: at, presence: presence,
-                                   since: since, skin: skin, tint: tint))
+                let f = Friend(id: id, name: who, state: state, sessions: sessions, seen: at, presence: presence,
+                               since: since, skin: skin, tint: tint)
+                f.cam = m["cam"] as? Bool ?? false
+                list.append(f)
             }
             list.sort { ($0.online ? 0 : 1, $0.name) < ($1.online ? 0 : 1, $1.name) }
             objectWillChange.send()
+            FriendCam.shared.friendsChanged()
+        case "cam-watch", "cam-offer", "cam-answer", "cam-stop":
+            guard m["to"] as? String == me, Date().timeIntervalSince(at) < 60 else { return }
+            FriendCam.shared.handle(m["kind"] as? String ?? "", from: id, name: who, m)
         case "poke":
             guard m["to"] as? String == me, fresh else { return }
             let heart = m["emote"] as? String == "heart"
@@ -363,6 +380,34 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         default:
             break
         }
+    }
+
+    // MARK: Diagnostic (socket : EncocheFriendTest)
+
+    /// Fait comme si un message arrivait du groupe (sans passer par ntfy), ouvre ou ferme l'onglet Potes, et
+    /// rend l'état de la caméra entre potes. Sert à essayer la caméra avec un faux pote, sur ce Mac seulement.
+    func diagnose(_ ev: [String: Any]) -> [String: Any] {
+        if var m = ev["message"] as? [String: Any] {
+            m["app"] = "encoche"
+            if let text = try? JSONSerialization.data(withJSONObject: m),
+               let line = try? JSONSerialization.data(withJSONObject: ["event": "message", "time": Date().timeIntervalSince1970,
+                                                                        "message": String(decoding: text, as: UTF8.self)]) {
+                receive(line)
+            }
+        }
+        if let open = ev["open"] as? Bool {
+            let store = Store.shared
+            if open {
+                store.friendsShowsChat = false
+                store.show(.friends)
+                store.pinUntil = Date().addingTimeInterval(40)  // reste ouverte sans la souris
+            } else {
+                store.collapse()
+            }
+        }
+        if ev["restart"] as? Bool == true { restart() }
+        let mine: [String: Any] = ["me": me, "friends": list.map { "\($0.name) cam=\($0.cam)" }]
+        return mine.merging(FriendCam.shared.diagnose()) { a, _ in a }
     }
 
     private func say(_ text: String) {

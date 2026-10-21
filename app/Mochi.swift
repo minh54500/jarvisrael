@@ -482,6 +482,7 @@ final class Mochi {
             drawPayot(ctx, hw: hw, hh: hh)
             drawKippah(ctx, hw: hw, hh: hh)
         case .fez: drawFez(ctx, hw: hw, hh: hh)
+        case .nonLa: drawNonLa(ctx, hw: hw, hh: hh)
         case .headphones: drawHeadphones(ctx, hw: hw, hh: hh)
         case .crown: drawCrown(ctx, hw: hw, hh: hh)
         case .beanie: drawBeanie(ctx, hw: hw, hh: hh)
@@ -533,6 +534,50 @@ final class Mochi {
         cord.addLine(to: CGPoint(x: wt * 0.98, y: top + hh * 0.45))
         ctx.stroke(cord, with: .color(black), style: StrokeStyle(lineWidth: max(0.6, hh * 0.045), lineCap: .round, lineJoin: .round))
         ctx.fill(Path(roundedRect: CGRect(cx: wt * 0.98, cy: top + hh * 0.53, w: hh * 0.1, h: hh * 0.2), cornerRadius: hh * 0.05), with: .color(black))
+    }
+
+    /// Skin Vietnam : le nón lá, chapeau conique rouge à nervures, avec l'étoile jaune.
+    private func drawNonLa(_ ctx: GraphicsContext, hw: Double, hh: Double) {
+        let apex = CGPoint(x: 0, y: -hh * 1.95), w = hw * 1.3, brim = -hh * 0.52, sag = hh * 0.2
+        // Ombre du bord sur le front.
+        if !mini {
+            var shade = Path()
+            shade.move(to: CGPoint(x: -hw * 0.95, y: brim + sag * 0.4))
+            shade.addQuadCurve(to: CGPoint(x: hw * 0.95, y: brim + sag * 0.4), control: CGPoint(x: 0, y: brim + sag * 2.4))
+            shade.addQuadCurve(to: CGPoint(x: -hw * 0.95, y: brim + sag * 0.4), control: CGPoint(x: 0, y: brim + sag * 1.2))
+            ctx.fill(shade, with: .color(.black.opacity(0.18)))
+        }
+        var hat = Path()
+        hat.move(to: apex)
+        hat.addQuadCurve(to: CGPoint(x: w, y: brim), control: CGPoint(x: w * 0.42, y: -hh * 1.08))  // flancs un peu creusés
+        hat.addQuadCurve(to: CGPoint(x: -w, y: brim), control: CGPoint(x: 0, y: brim + sag * 2))   // le bord suit la tête
+        hat.addQuadCurve(to: apex, control: CGPoint(x: -w * 0.42, y: -hh * 1.08))
+        hat.closeSubpath()
+        ctx.fill(hat, with: .linearGradient(Gradient(colors: [Color(hex: "#F0413A"), Color(hex: "#C21F1A")]),
+                                            startPoint: CGPoint(x: -w * 0.5, y: apex.y), endPoint: CGPoint(x: w * 0.6, y: brim)))
+        guard !mini else {
+            ctx.fill(starPath(hh * 0.2, hh * 0.08).offsetBy(dx: 0, dy: -hh * 1.3), with: .color(Color(hex: "#FFE14D")))
+            return
+        }
+        // Nervures de la feuille, du sommet vers le bord.
+        var ribs = Path()
+        for t in [-0.75, -0.42, -0.14, 0.14, 0.42, 0.75] {
+            let x = t * w, y = brim + sag * (1 - t * t) * 1.0
+            ribs.move(to: apex)
+            ribs.addLine(to: CGPoint(x: x, y: y))
+        }
+        ctx.stroke(ribs, with: .color(Color(hex: "#8E1410").opacity(0.35)), lineWidth: max(0.5, hh * 0.022))
+        // Bord : un liseré plus sombre.
+        var rim = Path()
+        rim.move(to: CGPoint(x: w, y: brim))
+        rim.addQuadCurve(to: CGPoint(x: -w, y: brim), control: CGPoint(x: 0, y: brim + sag * 2))
+        ctx.stroke(rim, with: .color(Color(hex: "#9C1712")), style: StrokeStyle(lineWidth: max(0.8, hh * 0.06), lineCap: .round))
+        // Reflet sur le flanc gauche.
+        var shine = Path()
+        shine.move(to: CGPoint(x: apex.x - hw * 0.05, y: apex.y + hh * 0.18))
+        shine.addQuadCurve(to: CGPoint(x: -w * 0.62, y: brim - hh * 0.06), control: CGPoint(x: -w * 0.32, y: -hh * 1.12))
+        ctx.stroke(shine, with: .color(.white.opacity(0.18)), style: StrokeStyle(lineWidth: max(0.6, hh * 0.05), lineCap: .round))
+        ctx.fill(starPath(hh * 0.22, hh * 0.09).offsetBy(dx: 0, dy: -hh * 1.3), with: .color(Color(hex: "#FFE14D")))
     }
 
     /// Casque audio : arceau par-dessus, deux écouteurs sur les côtés.

@@ -35,7 +35,7 @@ cat > $APP/Contents/Info.plist <<EOF
   <key>NSHighResolutionCapable</key><true/>
   <key>EncocheCommit</key><string>$(git rev-parse HEAD 2>/dev/null)</string>
   <key>EncocheSource</key><string>$PWD</string>
-  <key>NSCameraUsageDescription</key><string>Encoche affiche ta caméra en miroir quand tu ouvres le Miroir, pour vérifier ta tête avant une visio.</string>
+  <key>NSCameraUsageDescription</key><string>Encoche affiche ta caméra en miroir quand tu ouvres le Miroir, et la montre à tes potes si tu partages ta caméra avec eux (seulement pendant qu'ils regardent).</string>
   <key>NSBluetoothAlwaysUsageDescription</key><string>Encoche affiche la batterie de tes écouteurs (AirPods…) quand ils se connectent.</string>
   <key>NSMicrophoneUsageDescription</key><string>Encoche t'écoute quand tu dictes un message à Claude.</string>
   <key>NSSpeechRecognitionUsageDescription</key><string>Encoche transforme ta voix en texte pour écrire à Claude.</string>

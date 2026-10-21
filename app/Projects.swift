@@ -45,14 +45,27 @@ final class Projects: ObservableObject {
         Store.shared.collapse()
     }
 
-    /// Nouvelle session dans ce projet (avec un message déjà écrit si tu veux).
-    func start(in p: Project, prompt: String? = nil) {
+    /// Nouvelle session dans ce dossier (avec un message déjà écrit si tu veux), dans VS Code ou l'app Claude.
+    /// Faux si l'app voulue n'est pas là.
+    @discardableResult
+    func start(in path: String, prompt: String = "", place: OpenIn = .current) -> Bool {
+        if place == .app {
+            guard ClaudeApp.open(.code, prompt: prompt, folder: path) else { return false }
+            Store.shared.collapse()
+            return true
+        }
         let ws = NSWorkspace.shared
-        guard let app = ws.urlForApplication(withBundleIdentifier: "com.microsoft.VSCode") else { return }
-        ws.open([URL(fileURLWithPath: p.path)], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
-        var c = URLComponents(string: "vscode://anthropic.claude-code/open")!
-        if let prompt, !prompt.isEmpty { c.queryItems = [URLQueryItem(name: "prompt", value: prompt)] }
-        guard let link = c.url else { return }
+        guard let app = ws.urlForApplication(withBundleIdentifier: "com.microsoft.VSCode") else {
+            Store.shared.collapse()
+            Store.shared.showToast(Toast(icon: "exclamationmark.triangle.fill", color: "#F7B32B", title: "VS Code",
+                                         text: "Pas installé sur ce Mac : choisis l'app Claude dans Réglages → Général."))
+            return false
+        }
+        // Encodé deux fois : VS Code décode le lien une fois, puis l'extension relit la suite avec URLSearchParams
+        // (sinon un « & » coupe le message et un « + » devient une espace).
+        let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let link = URL(string: "vscode://anthropic.claude-code/open" + (text.isEmpty ? "" : "?prompt=" + ClaudeApp.encode(ClaudeApp.encode(text)))) else { return false }
+        ws.open([URL(fileURLWithPath: path)], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
         func open(_ tries: Int) {  // le lien va à la fenêtre active : on attend que ce soit celle du projet
             if ws.frontmostApplication?.bundleIdentifier == "com.microsoft.VSCode" {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { ws.open(link) }
@@ -62,6 +75,7 @@ final class Projects: ObservableObject {
         }
         open(40)
         Store.shared.collapse()
+        return true
     }
 
     /// Reprendre dans le Terminal : `claude --resume` dans le dossier du projet.

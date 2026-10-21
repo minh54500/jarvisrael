@@ -17,6 +17,7 @@ struct EmptyPanel: View {
                 if !store.hooked {
                     Button("Brancher à Claude Code") { store.setHooked(true) }.buttonStyle(Pill(primary: true))
                 } else {
+                    NewMenu(store: store)
                     Button("Projets récents") { store.goTo(.projects) }.buttonStyle(Pill(primary: true))
                 }
             }
@@ -34,7 +35,7 @@ struct OverviewPanel: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Card(wash: tint.opacity(0.16)) {
+            Card {  // la couleur de la section Claude ; l'état est dans sa pastille
                 VStack(alignment: .leading, spacing: 6) {
                     header
                     now
@@ -65,6 +66,7 @@ struct OverviewPanel: View {
                                 .help(store.focused?.agents.values.sorted().joined(separator: ", ") ?? "")
                         }
                         Spacer(minLength: 0)
+                        NewMenu(store: store)
                     }
                     UsageStrip()
                 }
@@ -73,8 +75,6 @@ struct OverviewPanel: View {
             }
         }
     }
-
-    private var tint: Color { Color(hex: STYLES[store.focused?.state ?? .idle]?.col ?? "#9A9FA8") }
 
     /// La session, son état en pastille, et les deux raccourcis (projets, ouvrir).
     private var header: some View {
@@ -124,6 +124,73 @@ struct OverviewPanel: View {
     }
 }
 
+/// « + » : une conversation normale, Claude Code ou Cowork, dans l'app Claude ou VS Code. Ce que tu as tapé
+/// dans le champ part avec, déjà écrit.
+struct NewMenu: View {
+    @ObservedObject var store: Store
+    @State private var hover = false
+
+    var body: some View {
+        let s = store.focused
+        Menu {
+            Section("App Claude") {
+                Button("Conversation") { store.openNew(.chat) }
+                if let s { Button("Claude Code dans \(s.name)") { store.openNew(.code, folder: s.cwd, place: .app) } }
+                Button("Cowork") { store.openNew(.cowork) }
+            }
+            if let s {
+                Section("VS Code") {
+                    Button("Claude Code dans \(s.name)") { store.openNew(.code, folder: s.cwd, place: .vscode) }
+                }
+            }
+            Divider()
+            Button("Dans un autre projet…") { store.goTo(.projects) }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "plus").font(.system(size: 8.5, weight: .bold))
+                Text("Nouveau")
+            }
+            .font(Fonts.caption.weight(.medium))
+            .foregroundStyle(hover ? Color.ink : Color.soft)
+            .padding(.horizontal, 8)
+            .frame(height: 22)
+            .background(Capsule().fill(.white.opacity(hover ? 0.12 : 0.07)))
+            .contentShape(Capsule())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .onHover { hover = $0 }
+        .help(store.draft.isEmpty ? "Nouvelle conversation ou session" : "Nouvelle conversation ou session, avec ton message déjà écrit")
+        .accessibilityLabel("Nouvelle conversation ou session")
+    }
+}
+
+/// VS Code | App Claude : où s'ouvrent les nouvelles sessions (le même réglage que dans les Réglages).
+struct OpenInSwitch: View {
+    @AppStorage("openIn") private var openIn = OpenIn.vscode
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(OpenIn.allCases) { o in
+                Button(o.name) { openIn = o }
+                    .buttonStyle(.plain)
+                    .font(Fonts.caption.weight(.semibold))
+                    .foregroundStyle(openIn == o ? Color.onLight : Color.muted)
+                    .padding(.horizontal, 8)
+                    .frame(height: 20)
+                    .background(Capsule().fill(openIn == o ? Color.ink : .clear))
+                    .contentShape(Capsule())
+                    .accessibilityAddTraits(openIn == o ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .background(Capsule().fill(.white.opacity(0.07)))
+        .help("Où s'ouvrent les nouvelles sessions (+)")
+    }
+}
+
 /// L'état d'une session en pastille colorée (« travaille », « attend ta réponse »…), qui pulse quand Claude bosse.
 struct StatePill: View {
     let state: BotState
@@ -162,10 +229,10 @@ struct ModelMenu: View {
     var body: some View {
         let current = store.focused?.model ?? ""
         let shown = current.isEmpty ? store.defaultModel : current
-        let vscode = store.focused?.entrypoint == "claude-vscode"
+        let vscode = store.focused.map { $0.entrypoint == "claude-vscode" || $0.inApp } ?? false
         Menu {
-            // Terminal : `/model nom` change la session. VS Code : son choix de modèle est une action de
-            // son interface, on ouvre donc la session pour le faire là-bas.
+            // Terminal : `/model nom` change la session. VS Code et l'app Claude : le choix du modèle est une
+            // action de leur interface, on ouvre donc la session pour le faire là-bas.
             if let s = store.focused, !vscode {
                 Section("Cette session (\(s.name))") {
                     ForEach(ClaudeModel.all) { m in
@@ -180,7 +247,7 @@ struct ModelMenu: View {
             }
             if let s = store.focused, vscode {
                 Divider()
-                Button("Changer celle-ci dans VS Code (/model)…") { store.jump(to: s) }
+                Button("Changer celle-ci dans \(s.place) (/model)…") { store.jump(to: s) }
             }
         } label: {
             HStack(spacing: 3) {
@@ -607,6 +674,7 @@ struct ProjectsPanel: View {
                     Text("Projets récents").font(Fonts.labelBold).foregroundStyle(Color.muted)
                     if projects.loading { ProgressView().controlSize(.mini) }
                     Spacer()
+                    OpenInSwitch()
                     Button("Résumé du jour") { store.goTo(.recap); Recap.shared.make() }.buttonStyle(Pill())
                 }
                 if projects.list.isEmpty && !projects.loading {
@@ -639,9 +707,13 @@ struct ProjectRow: View {
                 Text(project.name).font(Fonts.labelBold).lineLimit(1)
                 Text(ago(project.last)).font(Fonts.caption).foregroundStyle(Color.faint)
                 Spacer(minLength: 4)
-                Button { Projects.shared.start(in: project) } label: { Image(systemName: "plus").font(.system(size: 10, weight: .bold)) }
-                    .buttonStyle(MiniIcon()).help("Nouvelle session Claude dans \(project.name)")
+                Button { Projects.shared.start(in: project.path) } label: { Image(systemName: "plus").font(.system(size: 10, weight: .bold)) }
+                    .buttonStyle(MiniIcon()).help("Nouvelle session Claude Code dans \(project.name)")
                     .accessibilityLabel("Nouvelle session dans \(project.name)")
+                    .contextMenu {
+                        Button("Nouvelle session dans VS Code") { Projects.shared.start(in: project.path, place: .vscode) }
+                        Button("Nouvelle session dans l'app Claude") { Projects.shared.start(in: project.path, place: .app) }
+                    }
                 if let c = project.sessions.first {
                     Button("Reprendre") { Projects.shared.resume(c, in: project) }.buttonStyle(Chip())
                         .help("Reprendre : \(c.title)")
@@ -664,7 +736,7 @@ struct ProjectRow: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(HoverDim())
-                    .help("Reprendre cette session dans VS Code")
+                    .help("Reprendre cette session dans VS Code (l'app Claude ne rouvre pas les anciennes sessions)")
                     .contextMenu {
                         Button("Reprendre dans VS Code") { Projects.shared.resume(c, in: project) }
                         Button("Reprendre dans le Terminal") { Projects.shared.resumeInTerminal(c, in: project) }

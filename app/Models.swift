@@ -23,15 +23,18 @@ struct Session: Identifiable {
     var turn: Turn?         // bilan de la dernière demande terminée
     var todos: [Todo] = []  // la liste de tâches de Claude (outil TodoWrite)
     var agents: [String: String] = [:]  // sous-agents au travail (identifiant → type)
+    var background = false  // la demande est finie, mais des agents bossent encore en arrière-plan
 
     var plan: (done: Int, total: Int)? {
         todos.isEmpty ? nil : (todos.filter { $0.status == "completed" }.count, todos.count)
     }
     var currentTodo: Todo? { todos.first { $0.status == "in_progress" } }
+    var inApp: Bool { ["claude-desktop", "claude-desktop-3p", "local-agent"].contains(entrypoint) }  // lancée depuis l'app Claude
 
     /// Où vit la session, pour les boutons « Voir dans … ».
     var place: String {
         if entrypoint == "claude-vscode" { return "VS Code" }
+        if inApp { return "l'app Claude" }
         switch termProgram {
         case "Apple_Terminal": return "le Terminal"
         case "iTerm.app": return "iTerm"
@@ -139,6 +142,8 @@ struct Toast: Equatable {
     var text: String
     var opensChat = false
     var opensUpdate = false  // nouvelle version d'Encoche : un clic ouvre la mise à jour
+    var opens: Panel?        // une nouvelle de Claude arrivée pendant que tu écrivais : un clic l'ouvre…
+    var session: String?     // …sur la bonne session
 }
 enum Panel: Equatable { case greeting, overview, empty, approval, finished, error, upload, choose, converting, result, shelf, music, dev, care, todos, friends, projects, recap, welcome }
 

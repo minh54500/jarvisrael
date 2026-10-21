@@ -45,6 +45,7 @@ struct IslandRoot: View {
         let flare = store.mode == .hidden ? 0.0 : 14.0
         let radius = store.mode == .expanded ? 30.0 : store.mode == .peek ? 20.0 : store.mode == .compact ? 14.0 : 10.0
         ZStack(alignment: .top) {
+            CamHost()  // la caméra entre potes, sous le noir de l'encoche
             IslandShape(flare: flare, radius: radius)
                 .fill(Color.black)
                 .frame(width: size.width + 2 * flare, height: size.height)
@@ -370,11 +371,12 @@ struct IslandContent: View {
             .padding([.horizontal, .bottom], 10)
         }
         .frame(width: Store.expandedWidth, height: store.viewHeight, alignment: .top)
-        .overlay(alignment: .bottom) {
+        .environment(\.sectionTint, store.sectionTint)
+        .overlay(alignment: .top) {  // en haut, sous les onglets : jamais sur le champ où tu écris
             if let t = store.toast {
                 ToastPill(store: store, toast: t)
-                    .padding(.bottom, 18)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .padding(.top, store.cardTop + 6)
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
         .animation(.spring(response: 0.36, dampingFraction: 0.8), value: store.toast)
@@ -479,7 +481,7 @@ struct Tabs: View {
             .padding(.horizontal, active ? 9 : 6)
             .frame(height: 24)
             .background {
-                if active { Capsule().fill(.white.opacity(0.13)).matchedGeometryEffect(id: "tab", in: ns) }
+                if active { Capsule().fill(store.sectionTint?.opacity(0.3) ?? .white.opacity(0.13)).matchedGeometryEffect(id: "tab", in: ns) }
             }
             .contentShape(Capsule())
         }

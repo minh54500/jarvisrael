@@ -127,7 +127,9 @@ private struct SettingsView: View {
     @AppStorage("friends.on") private var friendsOn = false
     @AppStorage("friends.name") private var friendsName = ""
     @AppStorage("friends.group") private var friendsGroup = ""
+    @ObservedObject private var cam = FriendCam.shared
     @AppStorage("annotate") private var annotate = true
+    @AppStorage("openIn") private var openIn = OpenIn.vscode
     @ObservedObject private var updater = Updater.shared
     @ObservedObject private var selection = SettingsWindow.Selection.shared
 
@@ -145,6 +147,15 @@ private struct SettingsView: View {
                     get: { store.hiddenInShares },
                     set: { UserDefaults.standard.set($0, forKey: "privacy.hide"); store.applyPrivacy($0); store.objectWillChange.send() }))
                 Toggle("Annoter mes captures avant de les envoyer", isOn: $annotate)
+                Picker("Nouvelles sessions Claude Code dans", selection: $openIn) {
+                    ForEach(OpenIn.allCases) { Text($0.name).tag($0) }
+                }
+                if openIn == .app && !ClaudeApp.installed {
+                    HStack {
+                        Text("L'app Claude n'est pas installée sur ce Mac.").font(.caption).foregroundStyle(.secondary)
+                        Link("La télécharger", destination: URL(string: "https://claude.ai/download")!).font(.caption)
+                    }
+                }
                 HStack {
                     Text(store.hooked ? "Branchée à Claude Code" : "Pas branchée à Claude Code")
                     Spacer()
@@ -305,6 +316,17 @@ private struct SettingsView: View {
             }
             .onChange(of: friendsGroup) { _, _ in Friends.shared.restartSoon() }
             .onChange(of: friendsName) { _, _ in Friends.shared.restartSoon() }
+
+            Section("Caméra entre potes") {
+                Toggle("Partager ma caméra avec mes potes", isOn: Binding(get: { cam.sharing }, set: { cam.setSharing($0) }))
+                    .disabled(!friendsOn || friendsGroup.isEmpty)
+                if let problem = cam.problem { Text(problem).font(.caption).foregroundStyle(.red) }
+                Text("Image seulement, sans le son. Ceux qui ont le code du groupe te voient en direct quand ils ouvrent l'onglet Potes : ta caméra "
+                     + "ne s'allume que pendant qu'ils regardent (lumière verte du Mac, et l'encoche te dit qui). L'image va "
+                     + "directement de ton Mac au leur : pour ça, ton adresse internet leur est donnée. Sur certains réseaux "
+                     + "(4G, Wi-Fi d'entreprise), ça ne passe pas.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
 
             }
             .formStyle(.grouped)

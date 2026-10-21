@@ -53,6 +53,7 @@ final class Store: ObservableObject {
     var dizzyUntil: Date?
     var mochiHoverSince: Date?
     var ended = Set<String>()  // sessions fermées : on ignore leurs derniers événements
+    var watchingBackground = Set<String>()  // sessions dont on surveille les agents en arrière-plan
     var resultFolder: URL?
     var createdFiles: [URL] = []
     var process: Process?
@@ -83,11 +84,25 @@ final class Store: ObservableObject {
         case .friends: friendsShowsChat ? 240 : 190
         case .projects, .recap: 262
         case .welcome: 214
-        case .upload, .shelf: 176
+        case .upload: 176
+        case .shelf: 190
         case .music: 196
         case .converting, .result: 150
         }
         return base + max(0, notch.height - 32)
+    }
+
+    /// La couleur de la section ouverte, en fond de ses cartes et sur son onglet : Claude terre cuite,
+    /// Musique vert, Étagère bleu, Outils violet, Potes rose.
+    var sectionTint: Color? {
+        switch view {
+        case .greeting, .welcome: nil
+        case .music: Color(hex: "#1DB954")
+        case .shelf: Color(hex: "#3B9EFF")
+        case .dev: Color(hex: "#A78BFA")
+        case .friends: Color(hex: "#F472B6")
+        default: Color(hex: "#F2845C")
+        }
     }
 
     var islandTarget: CGSize {
@@ -264,6 +279,12 @@ final class Store: ObservableObject {
         }
     }
 
+    /// Tu écris dans l'encoche (à Claude, dans le chat des potes, au terminal…) : rien ne doit changer de
+    /// section sous tes doigts.
+    var writing: Bool {
+        mode == .expanded && (composing || view == .overview && !draft.isEmpty || view == .friends && !Friends.shared.draft.isEmpty)
+    }
+
     func show(_ v: Panel, sound: String? = "open") {
         if [.overview, .empty, .finished, .error, .approval, .todos].contains(v) { claudeSeenAt = Date() }
         let wasExpanded = mode == .expanded
@@ -381,6 +402,10 @@ final class Store: ObservableObject {
         guard let t = toast else { return }
         toast = nil
         if t.opensUpdate { collapse(); return SettingsWindow.show(.update) }
+        if let p = t.opens {
+            if let sid = t.session, sessions.contains(where: { $0.id == sid }) { focus = sid }
+            return show(p)
+        }
         if t.opensChat { friendsShowsChat = true; Friends.shared.markRead() }
         show(t.opensChat ? .friends : defaultView)
     }

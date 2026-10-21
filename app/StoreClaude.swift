@@ -10,6 +10,8 @@ extension Store {
     func handle(_ ev: [String: Any], _ responder: Responder?) {
         let event = ev["hook_event_name"] as? String ?? ""
         if event == "EncocheDebug" { return responder?.reply(debugState) ?? () }
+        if event == "EncocheCamTest" { return FriendCam.shared.selfTest { responder?.reply($0) } }
+        if event == "EncocheFriendTest" { return responder?.reply(Friends.shared.diagnose(ev)) ?? () }
         let sid = ev["session_id"] as? String ?? "inconnue"
         let cwd = ev["cwd"] as? String ?? NSHomeDirectory()
         lastActivity = Date()
@@ -36,15 +38,29 @@ extension Store {
         if let entry = ev["entrypoint"] as? String, !entry.isEmpty { s.entrypoint = entry }
         if let tty = ev["tty"] as? String, !tty.isEmpty { s.tty = tty }
         if let model = ev["model"] as? String, !model.isEmpty { s.model = model }
+        // Claude lui-même se remet au travail (pas un de ses agents) : on sort de l'arrière-plan.
+        if ev["agent_id"] == nil, ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "StopFailure"].contains(event) {
+            s.background = false
+        }
 
         switch event {
         case "SessionStart":
             s.state = .idle
             s.line = "Session ouverte"
         case "UserPromptSubmit":
-            // Nouveau message : les demandes encore affichées pour cette session n'attendent plus rien.
-            for p in permissions where p.session == sid { p.responder.close() }
-            permissions.removeAll { $0.session == sid }
+            // Pas un message de Minh : le rapport d'un agent en arrière-plan, ou le message d'une autre session.
+            // Claude reprend la même demande : son bilan en cours et les demandes affichées restent.
+            let prompt = ev["prompt"] as? String ?? ""
+            if s.turnStart != nil, ["<task-notification", "<agent-message", "<cross-session-message"].contains(where: { prompt.hasPrefix($0) }) {
+                s.state = .working
+                s.line = prompt.hasPrefix("<task-notification") ? "Lit le rapport de l'agent…" : "Lit un message d'une autre session…"
+                push(&s)
+                break
+            }
+            // Nouveau message : les demandes de Claude encore affichées n'attendent plus rien. Celles de ses agents
+            // en arrière-plan, si (elles disparaissent seules si leur agent les abandonne).
+            for p in permissions where p.session == sid && p.agent == nil { p.responder.close() }
+            permissions.removeAll { $0.session == sid && $0.agent == nil }
             s.state = .working
             s.turnStart = Date()
             if let path = ev["transcript_path"] as? String {
@@ -73,7 +89,7 @@ extension Store {
             push(&s)
             if draft.isEmpty && !sending { focus = sid }
             store(s)
-            alert(.approval, state: s.state)
+            alert(.approval, state: s.state, session: s)
             Phone.notify(plan ? "Claude propose un plan" : "Claude te pose une question", s.name, tag: "question")
             let id = p.id
             DispatchQueue.main.asyncAfter(deadline: .now() + 117) { self.expire(id) }
@@ -86,6 +102,7 @@ extension Store {
             push(&s)
         case "SubagentStop":
             s.agents.removeValue(forKey: ev["agent_id"] as? String ?? "")
+            if s.background && s.agents.isEmpty { return backgroundDone(s) }
         case "PreCompact":
             s.line = "Fait de la place dans sa mémoire…"
             push(&s)
@@ -100,6 +117,7 @@ extension Store {
                                           activeForm: $0["activeForm"] as? String ?? "") }
             }
             s.line = describe(ev["tool_name"] as? String ?? "", ev["tool_input"] as? [String: Any] ?? [:])
+            if let id = ev["agent_id"] as? String, let type = (ev["agent_type"] as? String) ?? s.agents[id] { s.line = "\(type) · " + s.line }
             push(&s)
         case "PostToolUse", "PostToolUseFailure":
             // Permission tranchée ailleurs (dans le terminal) : on la retire. Seulement celles du même agent :
@@ -125,7 +143,7 @@ extension Store {
             s.state = .approval
             if draft.isEmpty && !sending { focus = sid }  // pas de changement de destinataire en pleine écriture
             store(s)
-            alert(.approval, state: .approval)
+            alert(.approval, state: .approval, session: s)
             Phone.notify("Claude attend ton autorisation", "\(s.name) : \(title)", tag: "raising_hand")
             // Claude Code abandonne le hook après 120 s : on retire la demande avant.
             let id = permissions.last!.id
@@ -133,16 +151,26 @@ extension Store {
             return
         case "Notification":
             let type = ev["notification_type"] as? String ?? ""
-            if type != "permission_prompt" && !permissions.contains(where: { $0.session == sid }) {
+            if type != "permission_prompt" && !s.background && !permissions.contains(where: { $0.session == sid }) {
                 s.state = .waiting
                 s.line = ev["message"] as? String ?? "Claude attend ta réponse"
                 Sound.shared.play("question")
                 Phone.notify("Claude attend ta réponse", s.name, tag: "speech_balloon")
             }
         case "Stop":
+            // Des agents lancés en arrière-plan bossent encore : l'encoche le montre, et le bilan attendra la vraie fin.
+            s.agents = Self.backgroundAgents(ev)
+            if !s.agents.isEmpty {
+                s.background = true
+                s.state = .working
+                s.line = s.agents.count == 1 ? "« \(s.agents.values.first!) » bosse en arrière-plan…" : "\(s.agents.count) agents bossent en arrière-plan…"
+                store(s)
+                refreshMochi()
+                return watchBackground(sid)
+            }
+            s.background = false
             s.state = .finished
             s.line = "Terminé"
-            s.agents = [:]
             if let start = s.turnStart {
                 let turn = Turn(files: s.touched, seconds: Date().timeIntervalSince(start))
                 s.turn = turn
@@ -155,7 +183,7 @@ extension Store {
             if draft.isEmpty && !sending { focus = sid }  // pas de changement de destinataire en pleine écriture
             store(s)
             if permissions.isEmpty && view != .choose && view != .converting {
-                alert(.finished, state: .finished)
+                alert(.finished, state: .finished, session: s)
                 pinUntil = Date().addingTimeInterval(5)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 5.2) {
                     if self.view == .finished && !self.hovering { self.collapse() }
@@ -168,7 +196,7 @@ extension Store {
             s.message = (ev["error"] as? String) ?? (ev["message"] as? String) ?? "La réponse de Claude a échoué."
             if draft.isEmpty && !sending { focus = sid }  // pas de changement de destinataire en pleine écriture
             store(s)
-            alert(.error, state: .error)
+            alert(.error, state: .error, session: s)
             pinUntil = Date().addingTimeInterval(8)
             Phone.notify("Claude s'est arrêté", s.name, tag: "warning")
             return
@@ -215,13 +243,16 @@ extension Store {
 
     /// Captures de plus de 7 jours qui ne sont plus dans l'étagère : supprimées (au lancement).
     func cleanCaptures() {
-        let dir = Bridge.folder.appendingPathComponent("Captures"), kept = Set(shelf.map(\.path))
+        // Les captures, et les copies des fichiers déposés (voir DroppedFiles), qui ne sont plus sur l'étagère.
+        let dirs = [Bridge.folder.appendingPathComponent("Captures"), DroppedFiles.folder], kept = Set(shelf.map(\.path))
         let week = Date().addingTimeInterval(-7 * 24 * 3600)
         DispatchQueue.global(qos: .utility).async {
             let fm = FileManager.default
-            for url in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] {
-                let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date()
-                if date < week && !kept.contains(url.path) { try? fm.removeItem(at: url) }
+            for dir in dirs {
+                for url in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] {
+                    let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date()
+                    if date < week && !kept.contains(url.path) { try? fm.removeItem(at: url) }
+                }
             }
         }
     }
@@ -330,6 +361,55 @@ extension Store {
         if s.history.count > 6 { s.history.removeFirst() }
     }
 
+    /// Les agents lancés en arrière-plan qui tournent encore (identifiant → type), d'après le champ
+    /// `background_tasks` que Claude Code joint au Stop. Les tâches shell (un serveur lancé en fond…) n'en sont pas.
+    nonisolated static func backgroundAgents(_ ev: [String: Any]) -> [String: String] {
+        var found: [String: String] = [:]
+        for t in ev["background_tasks"] as? [[String: Any]] ?? [] {
+            guard let id = t["id"] as? String else { continue }
+            switch t["type"] as? String {
+            case "subagent": found[id] = (t["agent_type"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "agent"
+            case "workflow": found[id] = (t["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "workflow"
+            default: break
+            }
+        }
+        return found
+    }
+
+    /// Filet de sécurité, chaque minute tant que la session est en arrière-plan : ses agents envoient un événement
+    /// à chaque outil ; plus rien depuis 20 min veut dire qu'ils se sont arrêtés sans prévenir.
+    func watchBackground(_ sid: String) {
+        guard !watchingBackground.contains(sid) else { return }
+        watchingBackground.insert(sid)
+        func check() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 60) {
+                guard let s = self.sessions.first(where: { $0.id == sid }), s.background else {
+                    self.watchingBackground.remove(sid)
+                    return
+                }
+                if Date().timeIntervalSince(s.updated) > 20 * 60 {
+                    self.watchingBackground.remove(sid)
+                    return self.backgroundDone(s)
+                }
+                check()
+            }
+        }
+        check()
+    }
+
+    /// Les agents ont fini : Claude va lire leur rapport (son Stop fera le vrai bilan).
+    func backgroundDone(_ session: Session) {
+        var s = session
+        s.background = false
+        s.state = .finished
+        s.line = "Agent terminé"
+        store(s)
+        refreshMochi()
+        Sound.shared.play("pop")
+        let sid = s.id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { self.settle(sid) }
+    }
+
     func settle(_ sid: String) {
         guard var s = sessions.first(where: { $0.id == sid }), s.state == .finished else { return }
         s.state = .idle
@@ -337,9 +417,18 @@ extension Store {
         refreshMochi()
     }
 
-    func alert(_ v: Panel, state: BotState) {
+    func alert(_ v: Panel, state: BotState, session: Session? = nil) {
         refreshMochi()
         if mode == .expanded && view == .approval && v != .approval && !permissions.isEmpty { return }
+        if writing {  // une bulle en haut de l'encoche, pour la session qui vient de bouger ; un clic l'ouvre
+            let s = session ?? focused
+            let ask = permissions.last { $0.session == s?.id }
+            let text = v == .approval ? (ask.map { "\($0.title) — clic pour répondre" } ?? "attend ta réponse")
+                : v == .error ? "s'est arrêté" : (s?.line ?? "Terminé")
+            showToast(Toast(icon: v == .approval ? "hand.raised.fill" : v == .error ? "exclamationmark.triangle.fill" : "checkmark",
+                            color: STYLES[state]?.col ?? "#9A9FA8", title: s?.name ?? "Claude", text: text, opens: v, session: s?.id))
+            return Sound.shared.play(STYLES[state]?.sound ?? "blip")
+        }
         show(v, sound: nil)
         Sound.shared.play(STYLES[state]?.sound ?? "blip")
     }
@@ -491,6 +580,7 @@ extension Store {
         let bundle: String
         switch s.termProgram {
         case _ where s.entrypoint == "claude-vscode": bundle = "com.microsoft.VSCode"
+        case _ where s.inApp: bundle = ClaudeApp.bundle  // l'app n'a pas de lien vers une session : elle passe devant
         case "Apple_Terminal": bundle = "com.apple.Terminal"
         case "iTerm.app": bundle = "com.googlecode.iterm2"
         default: bundle = "com.microsoft.VSCode"

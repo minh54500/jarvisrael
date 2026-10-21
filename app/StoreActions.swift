@@ -22,12 +22,14 @@ extension Store {
 
     func unshelve(_ u: URL) {
         withAnimation(.easeOut(duration: 0.2)) { shelf.removeAll { $0 == u } }
+        DroppedFiles.forget([u])
         saveShelf()
         Sound.shared.play("blip")
         if shelf.isEmpty && view == .shelf { show(defaultView, sound: nil) }
     }
 
     func clearShelf() {
+        DroppedFiles.forget(shelf)
         shelf = []
         saveShelf()
         Sound.shared.play("close")
@@ -106,6 +108,19 @@ extension Store {
             self.draft = ""
             if !copied { self.say("Envoyé à Claude ✓", ok: true) }
         }
+    }
+
+    /// Nouvelle conversation ou session (bouton « + ») : ce que tu as tapé part avec, déjà écrit.
+    func openNew(_ kind: ClaudeApp.Kind, folder: String? = nil, place: OpenIn = .app) {
+        Voice.shared.stop()
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if kind == .code, let folder {
+            guard Projects.shared.start(in: folder, prompt: text, place: place) else { return }
+        } else {
+            guard ClaudeApp.open(kind, prompt: text) else { return }
+            collapse()
+        }
+        draft = ""
     }
 
     func loadDefaultModel() {

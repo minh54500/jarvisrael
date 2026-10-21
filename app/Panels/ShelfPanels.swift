@@ -229,19 +229,95 @@ struct DropZone: View {
         }
         .scaleEffect(targeted ? 1.015 : 1)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: targeted)
-        .onDrop(of: [.fileURL], isTargeted: $targeted) { providers in
-            let group = DispatchGroup()
-            var urls = [URL?](repeating: nil, count: providers.count)
-            let lock = NSLock()
-            for (i, p) in providers.enumerated() {
-                group.enter()
-                _ = p.loadObject(ofClass: URL.self) { url, _ in
-                    lock.lock(); urls[i] = url; lock.unlock()
-                    group.leave()
-                }
-            }
-            group.notify(queue: .main) { onFiles(urls.compactMap { $0 }) }
+        .onDrop(of: [.fileURL, .image], isTargeted: $targeted) { providers in
+            DroppedFiles.load(providers) { onFiles($0) }
             return true
+        }
+    }
+}
+
+/// Ce qu'on lâche sur l'encoche, en fichiers qui restent. La vignette d'une capture d'écran (et d'autres
+/// apps) ne donne qu'un fichier temporaire, effacé juste après le dépôt, ou seulement l'image : on en
+/// garde une copie dans ~/Library/Application Support/Encoche/Étagère.
+enum DroppedFiles {
+    static let folder = Bridge.folder.appendingPathComponent("Étagère")
+
+    static func load(_ providers: [NSItemProvider], done: @escaping ([URL]) -> Void) {
+        let group = DispatchGroup()
+        var urls = [URL?](repeating: nil, count: providers.count)
+        let lock = NSLock()
+        func found(_ i: Int, _ url: URL?) {
+            lock.lock(); urls[i] = url; lock.unlock()
+            group.leave()
+        }
+        for (i, p) in providers.enumerated() {
+            group.enter()
+            if p.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                _ = p.loadObject(ofClass: URL.self) { url, _ in
+                    if let url, let kept = keep(url) { return found(i, kept) }
+                    image(p) { found(i, $0) }  // pas de fichier lisible : l'image elle-même
+                }
+            } else {
+                image(p) { found(i, $0) }
+            }
+        }
+        group.notify(queue: .main) {
+            let list = urls.compactMap { $0 }
+            log(providers, list)
+            done(list)
+        }
+    }
+
+    /// Le fichier tel quel, ou sa copie s'il est dans un dossier temporaire ; nil s'il n'existe déjà plus.
+    private static func keep(_ dropped: URL) -> URL? {
+        let url = (dropped as NSURL).filePathURL ?? dropped  // les liens « /.file/id=… » du Finder
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let path = url.resolvingSymlinksInPath().path
+        let temporary = path.hasPrefix("/private/var/folders/") || path.hasPrefix("/var/folders/") || path.hasPrefix("/private/tmp/")
+            || path.contains("/TemporaryItems/") || path.contains("/Containers/com.apple.screencaptureui/")
+        return temporary ? copy(url, name: url.lastPathComponent) : url
+    }
+
+    /// L'image transportée par le glisser (une vignette, une image de page web…), écrite dans notre dossier.
+    private static func image(_ p: NSItemProvider, _ done: @escaping (URL?) -> Void) {
+        guard let type = p.registeredTypeIdentifiers.first(where: { UTType($0)?.conforms(to: .image) ?? false }) else { return done(nil) }
+        _ = p.loadFileRepresentation(forTypeIdentifier: type) { tmp, _ in
+            guard let tmp else { return done(nil) }
+            let ext = UTType(type)?.preferredFilenameExtension ?? tmp.pathExtension
+            let base = p.suggestedName ?? "Image \(Date().formatted(.dateTime.year().month().day().hour().minute().second()))"
+            done(copy(tmp, name: (base as NSString).pathExtension.isEmpty ? base + "." + ext : base))
+        }
+    }
+
+    /// Retirés de l'étagère : nos copies s'en vont (les vrais fichiers, eux, ne sont jamais touchés).
+    static func forget(_ urls: [URL]) {
+        for u in urls where u.deletingLastPathComponent().standardizedFileURL == folder.standardizedFileURL {
+            try? FileManager.default.removeItem(at: u)
+        }
+    }
+
+    private static func copy(_ src: URL, name: String) -> URL? {
+        let fm = FileManager.default
+        try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        let clean = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: ".")
+        var dst = folder.appendingPathComponent(clean), n = 2
+        while fm.fileExists(atPath: dst.path) {  // même nom déjà gardé : « nom 2.png »
+            let stem = (clean as NSString).deletingPathExtension, ext = (clean as NSString).pathExtension
+            dst = folder.appendingPathComponent("\(stem) \(n)" + (ext.isEmpty ? "" : ".\(ext)"))
+            n += 1
+        }
+        return (try? fm.copyItem(at: src, to: dst)) != nil ? dst : nil
+    }
+
+    /// Une ligne par dépôt dans drop.log (types reçus, fichiers gardés) : pour comprendre un dépôt qui rate.
+    private static func log(_ providers: [NSItemProvider], _ kept: [URL]) {
+        let line = "\(Date()) types=\(providers.map(\.registeredTypeIdentifiers)) gardés=\(kept.map(\.path))\n"
+        let file = Bridge.folder.appendingPathComponent("drop.log")
+        let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int) ?? 0
+        if size < 100_000, let h = try? FileHandle(forWritingTo: file) {  // au-delà de 100 Ko, on repart de zéro
+            h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close()
+        } else {
+            try? Data(line.utf8).write(to: file)
         }
     }
 }

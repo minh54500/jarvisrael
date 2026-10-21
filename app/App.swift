@@ -204,7 +204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if pressed && !wasPressed { dragCount = pb.changeCount }
         if !pressed && wasPressed { store.mouseReleased() }
         wasPressed = pressed
-        let filesDragged = pressed && pb.changeCount != dragCount && (pb.types?.contains(.fileURL) ?? false)
+        let filesDragged = pressed && pb.changeCount != dragCount && (pb.types ?? []).contains { [.fileURL, .png, .tiff].contains($0) }
         store.setFileDrag(filesDragged && p.y < 230 && abs(p.x - f.width / 2) < 340)
     }
 }

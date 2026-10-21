@@ -112,7 +112,7 @@ final class Bridge {
             // PermissionRequest attend la décision ; EncocheDebug (diagnostic) attend l'état de l'app.
             let event = obj["hook_event_name"] as? String ?? ""
             let asks = event == "PreToolUse" && ["AskUserQuestion", "ExitPlanMode"].contains(obj["tool_name"] as? String ?? "")
-            let blocking = asks || ["PermissionRequest", "EncocheDebug"].contains(event)
+            let blocking = asks || ["PermissionRequest", "EncocheDebug", "EncocheCamTest", "EncocheFriendTest"].contains(event)
             let responder = blocking ? Responder(fd: fd) : nil
             if !blocking { Darwin.close(fd) }
             DispatchQueue.main.async { self.onEvent(obj, responder) }

@@ -12,6 +12,7 @@ Un petit bonhomme qui vit dans l'encoche de ton Mac et garde un œil sur Claude 
 - **Jauge d'usage de ton abonnement Claude** : la session de 5 h et la semaine, et quand ça repart à zéro. Le bonhomme prévient à 80 %.
 - **Sous-agents et mémoire** : combien d'agents travaillent, et quand Claude compresse sa mémoire.
 - **Écris à Claude sans quitter ce que tu fais** : ⌥Espace ouvre l'encoche prête à écrire, ⌥⇧Espace pour dicter.
+- **VS Code ou l'app Claude, au choix** : « + Nouveau » ouvre une conversation, une session Claude Code ou Cowork dans l'[app Claude](https://claude.ai/download) avec ton message déjà écrit, ou une session Claude Code dans VS Code. Projets récents et les Réglages retiennent où ouvrir les nouvelles sessions.
 - **Prompts favoris** en un clic (« Continue », « Lance les tests »…), **choix du modèle**, et un **bilan de fin** : fichiers modifiés, lignes, tokens.
 - **Étagère** pour garder des fichiers sous la main, **historique du presse-papiers**, **capture d'écran** envoyée à Claude.
 - **Onglet Outils** :
@@ -25,6 +26,7 @@ Un petit bonhomme qui vit dans l'encoche de ton Mac et garde un œil sur Claude 
 - **Discrète** : l'encoche n'apparaît pas dans les captures et enregistrements d'écran (réglable). En partage d'écran (Zoom, Meet…), ça dépend de l'app : vérifie avant un appel important.
 - **Rappels** : pause, verre d'eau, « va dormir »… Tout se coupe dans les Réglages.
 - **Entre potes** : partagez un groupe, voyez les bonshommes des autres (et s'ils sont sur leur Mac), discutez dans le chat, envoyez-vous des cœurs.
+- **Caméra entre potes** (si chacun l'active) : l'onglet Potes montre en direct ceux qui partagent leur caméra, image seulement, sans appel. Ta caméra ne s'allume que pendant qu'un pote regarde, et l'encoche te dit qui. L'image va directement d'un Mac à l'autre (sur certains réseaux, comme la 4G ou un Wi-Fi d'entreprise, ça ne passe pas).
 - **Le plan de Claude** : sa liste de tâches, cochée au fur et à mesure.
 - **Notifications sur ton téléphone** avec [ntfy](https://ntfy.sh), si tu veux (désactivé par défaut).
 

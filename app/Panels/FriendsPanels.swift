@@ -7,6 +7,7 @@ import SwiftUI
 struct FriendsPanel: View {
     @ObservedObject var store: Store
     @ObservedObject var friends = Friends.shared
+    @ObservedObject var cam = FriendCam.shared
 
     var body: some View {
         Card(wash: Color(hex: "#F472B6", 0.24)) {
@@ -29,6 +30,11 @@ struct FriendsPanel: View {
                             }
                             if let n = friends.notice {
                                 Text(n).font(Fonts.label.weight(.medium)).foregroundStyle(Color(hex: "#FF9ECF")).lineLimit(1)
+                            } else if !cam.watchers.isEmpty {
+                                // Ma caméra est allumée pour quelqu'un : ça se voit, et ça se coupe d'un clic.
+                                Label("\(cam.watchers.values.sorted().joined(separator: ", ")) te regarde", systemImage: "eye.fill")
+                                    .font(Fonts.label.weight(.medium)).foregroundStyle(Color(hex: "#FF9ECF")).lineLimit(1)
+                                Button("Couper ma caméra") { cam.setSharing(false) }.buttonStyle(Chip())
                             } else if !store.friendsShowsChat {
                                 Text(friends.list.isEmpty ? "Donne le code du groupe à tes potes." : "Clic : un cœur · survol : coucou")
                                     .font(Fonts.label).foregroundStyle(Color.muted).lineLimit(1)
@@ -44,6 +50,9 @@ struct FriendsPanel: View {
                                     ForEach(friends.list) { f in FriendTile(friend: f) }
                                 }
                             }
+                            // Onglet ouvert : on demande l'image de ceux qui partagent leur caméra.
+                            .onAppear { cam.setViewing(true) }
+                            .onDisappear { cam.setViewing(false) }
                         }
                     }
                 }
@@ -205,19 +214,32 @@ struct ChatRow: View {
 
 struct FriendTile: View {
     let friend: Friends.Friend
+    @ObservedObject var frames = FriendCam.Frames.shared
+    @ObservedObject var cam = FriendCam.shared
     @State private var hover = false
 
     var body: some View {
         VStack(spacing: 3) {
-            TimelineView(.animation(minimumInterval: 1.0 / 30)) { tl in
-                Canvas { ctx, size in
-                    _ = tl.date
-                    friend.mochi.update(CACurrentMediaTime())
-                    friend.mochi.draw(ctx, cx: size.width / 2, cy: size.height / 2 + 4, hb: 28)
+            if let image = frames.images[friend.id] {
+                // Sa caméra, en direct (comme le Miroir, mais chez lui).
+                Image(nsImage: image).resizable().interpolation(.medium).aspectRatio(contentMode: .fill)
+                    .frame(width: 84, height: 56)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(alignment: .topLeading) {
+                        Circle().fill(Color.danger).frame(width: 6, height: 6).padding(5)
+                    }
+                    .accessibilityLabel("Caméra de \(friend.name), en direct")
+            } else {
+                TimelineView(.animation(minimumInterval: 1.0 / 30)) { tl in
+                    Canvas { ctx, size in
+                        _ = tl.date
+                        friend.mochi.update(CACurrentMediaTime())
+                        friend.mochi.draw(ctx, cx: size.width / 2, cy: size.height / 2 + 4, hb: 28)
+                    }
                 }
+                .frame(width: 84, height: 56)
+                .opacity(friend.online ? (friend.presence == .away ? 0.7 : 1) : 0.4)
             }
-            .frame(width: 84, height: 56)
-            .opacity(friend.online ? (friend.presence == .away ? 0.7 : 1) : 0.4)
             HStack(spacing: 4) {
                 Circle().fill(dot).frame(width: 6, height: 6)
                 Text(friend.name).font(Fonts.labelBold).lineLimit(1)
@@ -256,6 +278,8 @@ struct FriendTile: View {
 
     private var status: String {
         guard friend.online else { return "hors ligne" }
+        if frames.images[friend.id] != nil { return "en direct" }
+        if friend.cam && cam.failed.contains(friend.id) { return "caméra injoignable" }
         if friend.presence == .away {
             let m = Int(Date().timeIntervalSince(friend.since) / 60)
             return m < 1 ? "absent" : m < 60 ? "absent · \(m) min" : "absent · \(m / 60) h"
