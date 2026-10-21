@@ -215,6 +215,7 @@ struct SettingsMenu: View {
             Sound.shared.on.toggle()
             store.objectWillChange.send()
         }
+        Button(store.dnd ? "Couper « Ne pas déranger »" : "Ne pas déranger") { store.setDND(!store.dnd) }
         Divider()
         if store.hooked {
             Button("Débrancher de Claude Code") { store.setHooked(false) }
@@ -399,6 +400,15 @@ struct IslandContent: View {
                 }
                 .padding(.trailing, 6)
             }
+            Button { store.setDND(!store.dnd) } label: {
+                Image(systemName: store.dnd ? "moon.fill" : "moon")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(store.dnd ? Color(hex: "#A78BFA") : Color.muted)
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            .buttonStyle(IconButton())
+            .help(store.dnd ? "Ne pas déranger : activé (clic pour le couper)" : "Ne pas déranger : messages et cœurs des potes sans bulle ni son, rappels en pause")
+            .accessibilityLabel(store.dnd ? "Couper ne pas déranger" : "Activer ne pas déranger")
             Button {
                 Sound.shared.on.toggle()
                 store.objectWillChange.send()

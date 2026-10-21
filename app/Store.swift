@@ -81,7 +81,7 @@ final class Store: ObservableObject {
         case .dev: tool == .servers ? 206 : tool == .mirror ? 230 : 250
         case .care: 164
         case .todos: 216
-        case .friends: friendsShowsChat ? 240 : 190
+        case .friends: friendsShowsChat ? 240 : 206
         case .projects, .recap: 262
         case .welcome: 214
         case .upload: 176
@@ -281,6 +281,19 @@ final class Store: ObservableObject {
         }
     }
 
+    /// Ne pas déranger : les messages des potes arrivent sans bulle ni son (comptés en non-lus sur l'onglet Potes), leurs
+    /// cœurs et coucous sont ignorés, les rappels attendent, personne ne voit ta caméra (sauf une caméra ensemble que tu
+    /// as acceptée) et les potes voient « ne pas déranger ». Claude, lui, prévient toujours.
+    @Published private(set) var dnd = UserDefaults.standard.bool(forKey: "dnd")
+
+    func setDND(_ on: Bool) {
+        dnd = on
+        UserDefaults.standard.set(on, forKey: "dnd")
+        Friends.shared.skinChanged()  // les potes le voient tout de suite
+        FriendCam.shared.dndChanged()
+        Sound.shared.play(on ? "close" : "blip")
+    }
+
     /// Tu écris dans l'encoche (à Claude, dans le chat des potes, au terminal…) : rien ne doit changer de
     /// section sous tes doigts.
     var writing: Bool {
@@ -442,6 +455,7 @@ final class Store: ObservableObject {
 
     /// Un message d'un pote : le bonhomme réagit, et le chat s'ouvre si on n'est pas occupé.
     func chatReceived(from name: String, color: String, text: String) {
+        guard !dnd else { return }  // ne pas déranger : le message attend dans le chat (compté en non-lu)
         Sound.shared.play("question")
         mochi.emote(.happy, 1.5)
         Phone.notify("Message de \(name)", text, tag: "speech_balloon")
@@ -488,7 +502,15 @@ final class Store: ObservableObject {
     }
 
     /// Un pote m'envoie un cœur ou un coucou : le bonhomme réagit, et l'onglet Potes s'ouvre si on n'est pas occupé.
+    /// Un pote surveillé arrive sur son Mac.
+    func friendArrived(_ name: String, color: String) {
+        guard !dnd else { return }
+        Sound.shared.play("peek")
+        showToast(Toast(icon: "bell.fill", color: color, title: name, text: "est sur son Mac", opens: .friends))
+    }
+
     func poked(heart: Bool, from name: String) {
+        guard !dnd else { return }
         mochi.emote(heart ? .love : .wink, 2.2)
         Sound.shared.play(heart ? "love" : "peek")
         showToast(Toast(icon: heart ? "heart.fill" : "hand.wave.fill", color: heart ? "#FF5C8A" : "#F7B32B",

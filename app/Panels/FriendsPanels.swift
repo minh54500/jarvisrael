@@ -8,6 +8,9 @@ struct FriendsPanel: View {
     @ObservedObject var store: Store
     @ObservedObject var friends = Friends.shared
     @ObservedObject var cam = FriendCam.shared
+    @State private var editingNote = false
+    @State private var noteDraft = ""
+    @State private var focusNote = false
 
     var body: some View {
         Card(wash: Color(hex: "#F472B6", 0.24)) {
@@ -23,6 +26,7 @@ struct FriendsPanel: View {
                     }
                 } else {
                     VStack(alignment: .leading, spacing: 7) {
+                        if editingNote { noteEditor } else {
                         HStack(spacing: 8) {
                             Segments(left: "Potes", right: friends.unread > 0 ? "Chat \(friends.unread)" : "Chat", rightOn: store.friendsShowsChat) { on in
                                 Sound.shared.play("tick")
@@ -30,6 +34,21 @@ struct FriendsPanel: View {
                             }
                             if let n = friends.notice {
                                 Text(n).font(Fonts.label.weight(.medium)).foregroundStyle(Color(hex: "#FF9ECF")).lineLimit(1)
+                            } else if !cam.calls.isEmpty {
+                                // En appel : « Raccrocher » reste toujours là ; une autre proposition s'ajoute à côté.
+                                let others = cam.watchers.filter { cam.calls[$0.key] == nil }.values.sorted()
+                                Label("Caméra avec \(cam.calls.values.sorted().joined(separator: ", "))"
+                                      + (others.isEmpty ? "" : " · \(others.joined(separator: ", ")) te regarde"), systemImage: "video.fill")
+                                    .font(Fonts.label.weight(.medium)).foregroundStyle(Color(hex: "#FF9ECF")).lineLimit(1)
+                                if let invite = cam.invites.first {
+                                    Button("Accepter \(invite.value)") { cam.accept(invite.key) }.buttonStyle(Chip())
+                                }
+                                Button("Raccrocher") { cam.hangUp() }.buttonStyle(Chip())
+                            } else if let invite = cam.invites.first {
+                                Label("\(invite.value) te propose la caméra", systemImage: "video.fill")
+                                    .font(Fonts.label.weight(.medium)).foregroundStyle(Color(hex: "#FF9ECF")).lineLimit(1)
+                                Button("Accepter") { cam.accept(invite.key) }.buttonStyle(Chip())
+                                Button("Non") { cam.decline(invite.key) }.buttonStyle(Chip())
                             } else if !cam.watchers.isEmpty {
                                 // Ma caméra est allumée pour quelqu'un : ça se voit, et ça se coupe d'un clic.
                                 Label("\(cam.watchers.values.sorted().joined(separator: ", ")) te regarde", systemImage: "eye.fill")
@@ -40,13 +59,44 @@ struct FriendsPanel: View {
                                     .font(Fonts.label).foregroundStyle(Color.muted).lineLimit(1)
                             }
                             Spacer(minLength: 0)
+                            // Mon statut, visible sous mon bonhomme chez les potes.
+                            Button {
+                                noteDraft = friends.note
+                                focusNote = true
+                                editingNote = true
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "text.bubble").font(.system(size: 10, weight: .semibold))
+                                    Text(friends.note.isEmpty ? "Ton statut" : friends.note).lineLimit(1)
+                                }
+                                .frame(maxWidth: 150)
+                            }
+                            .buttonStyle(Chip())
+                            .help("Ton statut, visible sous ton bonhomme chez tes potes")
+                            // Ma caméra : partagée ou non, en un clic (le même réglage que dans les Réglages).
+                            let inCall = !cam.calls.isEmpty, on = cam.sharing || inCall
+                            Button {
+                                if inCall { return cam.hangUp() }  // en appel, la caméra filme : le bouton raccroche
+                                cam.setSharing(!cam.sharing)
+                                Sound.shared.play("tick")
+                                friends.say(cam.sharing ? "Caméra partagée : tes potes peuvent te voir" : "Caméra coupée")
+                            } label: {
+                                Image(systemName: on ? "video.fill" : "video.slash.fill")
+                                    .font(.system(size: 11.5, weight: .semibold))
+                                    .foregroundStyle(on ? Color(hex: "#FF9ECF") : Color.muted)
+                            }
+                            .buttonStyle(IconButton())
+                            .help(inCall ? "Caméra ensemble en cours : clic pour raccrocher"
+                                  : cam.sharing ? "Ta caméra est partagée : clic pour la couper" : "Partager ta caméra avec tes potes")
+                            .accessibilityLabel(inCall ? "Raccrocher" : cam.sharing ? "Couper le partage de ma caméra" : "Partager ma caméra")
                         }
                         .animation(.easeOut(duration: 0.2), value: friends.notice)
+                        }
                         if store.friendsShowsChat {
                             ChatView(store: store)
                         } else {
                             ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 6) {
+                                HStack(alignment: .top, spacing: 6) {
                                     ForEach(friends.list) { f in FriendTile(friend: f) }
                                 }
                             }
@@ -65,6 +115,27 @@ struct FriendsPanel: View {
         // Onglet Potes ouvert (vignettes ou chat) : on demande l'image de ceux qui partagent leur caméra.
         .onAppear { cam.setViewing(true) }
         .onDisappear { cam.setViewing(false) }
+    }
+}
+
+extension FriendsPanel {
+    /// Écrire son statut, à la place de l'en-tête (Entrée valide, vide = effacé).
+    var noteEditor: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "text.bubble.fill").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color(hex: "#FF9ECF"))
+            ComposeField(text: $noteDraft, placeholder: "Ton statut (ex. en call client) · Entrée pour valider",
+                         onSubmit: { friends.setNote(noteDraft); editingNote = false },
+                         onEditing: { store.setComposing($0) }, focus: focusNote, onFocused: { focusNote = false })
+                .frame(height: 18)
+            Text("\(Friends.noteLimit - noteDraft.count)").font(Fonts.caption).monospacedDigit()
+                .foregroundStyle(noteDraft.count > Friends.noteLimit ? Color.danger : Color.faint)
+            Button("OK") { friends.setNote(noteDraft); editingNote = false }.buttonStyle(Chip())
+            Button("Annuler") { editingNote = false; store.setComposing(false) }.buttonStyle(Chip())
+        }
+        .padding(.leading, 11)
+        .padding(.trailing, 5)
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(.white.opacity(0.1)))
     }
 }
 
@@ -118,6 +189,13 @@ struct ChatView: View {
                             let pause = prev.map { m.at.timeIntervalSince($0.at) > 10 * 60 } ?? true
                             if pause { TimeSeparator(date: m.at) }
                             ChatRow(message: m, color: color(m), first: pause || prev?.from != m.from)
+                        }
+                        if let last = friends.chat.last, last.mine, last.state == "sent" || last.state == nil {
+                            let names = friends.seenNames(after: last.at)
+                            if !names.isEmpty {
+                                Text("Vu par \(names.joined(separator: ", "))").font(Fonts.caption).foregroundStyle(Color.faint)
+                                    .frame(maxWidth: .infinity, alignment: .trailing)
+                            }
                         }
                         Color.clear.frame(height: 1).id("fin")
                     }
@@ -199,6 +277,7 @@ struct ChatRow: View {
     let message: Friends.Message
     let color: String
     let first: Bool
+    @State private var hover = false
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 6) {
@@ -224,13 +303,59 @@ struct ChatRow: View {
                     .background(RoundedRectangle(cornerRadius: 13, style: .continuous)
                         .fill(message.mine ? Color(hex: "#FF8BC4") : .white.opacity(0.09)))
                     .opacity(message.state == "sending" ? 0.6 : 1)
+                    // Survol : réagir d'un clic, en haut de la bulle (comme dans Messages).
+                    .overlay(alignment: message.mine ? .topTrailing : .topLeading) {
+                        if hover && (message.state == nil || message.state == "sent") { reactionBar.offset(y: -22) }
+                    }
+                    .zIndex(1)
+                if let r = message.reactions, !r.isEmpty { reactions(r) }
                 if message.mine, let state = message.state, state != "sent" { status(state) }
             }
             .help(message.at.formatted(date: .abbreviated, time: .shortened))
+            .onHover { hover = $0 }
             if !message.mine { Spacer(minLength: 70) }
         }
         .padding(.top, first ? 5 : 0)
         .transition(.opacity.combined(with: .move(edge: .bottom)))
+    }
+
+    private var reactionBar: some View {
+        HStack(spacing: 1) {
+            ForEach(Friends.reactionEmojis, id: \.self) { e in
+                Button { Friends.shared.react(message, e) } label: { Text(e).font(.system(size: 13)).frame(width: 20, height: 20) }
+                    .buttonStyle(HoverDim())
+                    .accessibilityLabel("Réagir \(e)")
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 1)
+        .background(Capsule().fill(Color(hex: "#2A2C33")))
+        .overlay(Capsule().strokeBorder(.white.opacity(0.1)))
+        .shadow(color: .black.opacity(0.4), radius: 6, y: 2)
+    }
+
+    /// Les réactions sous la bulle : « 👍 2 » ; la mienne en surbrillance, un clic l'enlève ou l'ajoute.
+    private func reactions(_ r: [String: [String]]) -> some View {
+        let me = Friends.shared.me
+        return HStack(spacing: 3) {
+            ForEach(Friends.reactionEmojis.filter { r[$0] != nil }, id: \.self) { e in
+                let people = r[e] ?? []
+                Button { Friends.shared.react(message, e) } label: {
+                    Text("\(e) \(people.count)").font(Fonts.caption.weight(.medium)).monospacedDigit()
+                        .foregroundStyle(Color.ink)
+                        .padding(.horizontal, 6).frame(height: 18)
+                        .background(Capsule().fill(people.contains(me) ? Color(hex: "#FF8BC4").opacity(0.35) : .white.opacity(0.08)))
+                }
+                .buttonStyle(.plain)
+                .help(people.map(Self.who).joined(separator: ", "))
+            }
+        }
+    }
+
+    /// « toi », ou le prénom du pote.
+    private static func who(_ id: String) -> String {
+        if id == Friends.shared.me { return "toi" }
+        return Friends.shared.list.first { $0.id == id }?.name ?? "un pote"
     }
 
     @ViewBuilder private func status(_ state: String) -> some View {
@@ -249,6 +374,7 @@ struct ChatRow: View {
 
 struct FriendTile: View {
     let friend: Friends.Friend
+    @ObservedObject var friends = Friends.shared
     @ObservedObject var frames = FriendCam.Frames.shared
     @ObservedObject var cam = FriendCam.shared
     @State private var hover = false
@@ -273,16 +399,37 @@ struct FriendTile: View {
                     }
                 }
                 .frame(width: 84, height: 56)
-                .opacity(friend.online ? (friend.presence == .away ? 0.7 : 1) : 0.4)
+                .saturation(friend.dnd ? 0 : 1)  // ne pas déranger : grisé, avec une lune
+                .opacity(friend.online ? (friend.dnd ? 0.45 : friend.presence == .away ? 0.7 : 1) : 0.4)
+                .overlay(alignment: .topTrailing) {
+                    if friend.dnd && friend.online {
+                        Image(systemName: "moon.fill").font(.system(size: 10, weight: .semibold)).foregroundStyle(Color(hex: "#A78BFA")).padding(4)
+                    }
+                }
             }
             HStack(spacing: 4) {
                 Circle().fill(dot).frame(width: 6, height: 6)
                 Text(friend.name).font(Fonts.labelBold).lineLimit(1)
+                if friends.watched.contains(friend.id) {
+                    Image(systemName: "bell.fill").font(.system(size: 8)).foregroundStyle(Color.faint)
+                        .help("Je te préviens quand \(friend.name) arrive sur son Mac")
+                }
             }
             Text(status)
                 .font(Fonts.caption)
-                .foregroundStyle(friend.online && friend.presence == .active ? Color(hex: STYLES[friend.state]?.col ?? "#9A9FA8") : Color.faint)
+                .foregroundStyle(friend.online && friend.presence == .active && !friend.dnd ? Color(hex: STYLES[friend.state]?.col ?? "#9A9FA8") : Color.faint)
                 .lineLimit(1)
+            // Son statut perso, sinon ce qu'il écoute (un clic l'ouvre dans Spotify).
+            if !friend.note.isEmpty && friend.online {
+                Text("« \(friend.note) »").font(Fonts.caption).italic().foregroundStyle(Color.soft).lineLimit(1)
+                    .help(friend.note)
+            } else if let music = friend.music, friend.online {
+                Button { if let id = friend.musicID, let url = URL(string: id) { NSWorkspace.shared.open(url) } } label: {
+                    Label(music, systemImage: "music.note").font(Fonts.caption).foregroundStyle(Color.spotify).lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .help("\(friend.name) écoute « \(music) » : clic pour l'écouter")
+            }
         }
         .frame(width: 96)
         .padding(.vertical, 4)
@@ -295,25 +442,41 @@ struct FriendTile: View {
                     .accessibilityLabel("Faire coucou à \(friend.name)")
             }
         }
+        .overlay(alignment: .topLeading) {
+            if hover && friend.online && frames.images[friend.id] == nil {
+                Button { FriendCam.shared.propose(friend) } label: { Image(systemName: "video.fill").font(.system(size: 9.5, weight: .semibold)) }
+                    .buttonStyle(MiniIcon())
+                    .help("Proposer la caméra à \(friend.name)")
+                    .accessibilityLabel("Proposer la caméra à \(friend.name)")
+            }
+        }
         .contentShape(Rectangle())
         .onHover { hover = $0 }
         .onTapGesture { Friends.shared.poke(friend, "heart") }
         .contextMenu {
             Button("Envoyer un cœur") { Friends.shared.poke(friend, "heart") }
             Button("Faire coucou") { Friends.shared.poke(friend, "wave") }
+            if friend.online { Button("Proposer la caméra") { FriendCam.shared.propose(friend) } }
+            Button(friends.watched.contains(friend.id) ? "Ne plus me prévenir quand il arrive" : "Me prévenir quand il arrive sur son Mac") {
+                Friends.shared.toggleWatch(friend)
+            }
+            if let id = friend.musicID, let music = friend.music {
+                Button("Écouter « \(music) »") { if let url = URL(string: id) { NSWorkspace.shared.open(url) } }
+            }
         }
         .help("Envoyer un cœur à \(friend.name)")
         .accessibilityLabel("\(friend.name), \(status)")
     }
 
-    /// Vert : sur son Mac. Orange : absent. Gris : hors ligne.
+    /// Vert : sur son Mac. Violet : ne pas déranger. Orange : absent. Gris : hors ligne.
     private var dot: Color {
-        !friend.online ? Color.faint : friend.presence == .active ? Color.success : Color.warning
+        !friend.online ? Color.faint : friend.dnd ? Color(hex: "#A78BFA") : friend.presence == .active ? Color.success : Color.warning
     }
 
     private var status: String {
         guard friend.online else { return "hors ligne" }
         if frames.images[friend.id] != nil { return "en direct" }
+        if friend.dnd { return "ne pas déranger" }
         if friend.cam && cam.failed.contains(friend.id) { return "caméra injoignable" }
         if friend.presence == .away {
             let m = Int(Date().timeIntervalSince(friend.since) / 60)

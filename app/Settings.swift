@@ -128,6 +128,7 @@ private struct SettingsView: View {
     @AppStorage("friends.name") private var friendsName = ""
     @AppStorage("friends.group") private var friendsGroup = ""
     @ObservedObject private var cam = FriendCam.shared
+    @AppStorage("friends.music") private var musicShare = false
     @AppStorage("annotate") private var annotate = true
     @AppStorage("openIn") private var openIn = OpenIn.vscode
     @ObservedObject private var updater = Updater.shared
@@ -306,6 +307,8 @@ private struct SettingsView: View {
                     }
                     .disabled(friendsGroup.isEmpty)
                 }
+                Toggle("Montrer à mes potes ce que j'écoute sur Spotify", isOn: $musicShare)
+                    .onChange(of: musicShare) { _, _ in Friends.shared.skinChanged() }
                 Text("Crée un groupe et envoie le code à tes potes : ils le collent ici. Seuls ton pseudo et l'humeur de ton "
                      + "bonhomme sont partagés (jamais tes projets ni tes messages), via ntfy.sh.")
                     .font(.caption).foregroundStyle(.secondary)

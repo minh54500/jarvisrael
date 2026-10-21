@@ -38,6 +38,80 @@ final class FriendCam: NSObject, ObservableObject, WKScriptMessageHandler, WKUID
     private var pendingAsk: DispatchWorkItem?
     private var settled = false               // onglet ouvert depuis assez longtemps pour demander les images
     private var test: ((([String: Any]) -> Void))?
+    @Published private(set) var invites: [String: String] = [:]  // potes qui me proposent la caméra : id → nom
+    @Published private(set) var calls: [String: String] = [:]    // caméra ensemble en cours : id → nom
+    private var proposed: [String: Date] = [:]                    // potes à qui je l'ai proposée
+
+    /// Ma caméra peut partir vers ce pote : je la partage à tous, ou on a dit oui à la caméra ensemble.
+    private func allowed(_ id: String) -> Bool { sharing || calls[id] != nil }
+
+    // MARK: Caméra ensemble (une proposition, comme un appel sans le son)
+
+    /// Proposer la caméra à un pote : s'il accepte, vos deux caméras s'allument l'une pour l'autre (même sans
+    /// « Partager ma caméra »), jusqu'à ce que l'un raccroche ou referme l'onglet Potes.
+    func propose(_ f: Friends.Friend) {
+        guard Friends.shared.configured, f.online else { return }
+        if f.dnd { return Friends.shared.say("\(f.name) est en « ne pas déranger »") }
+        guard Date().timeIntervalSince(proposed[f.id] ?? .distantPast) > 5 else { return }  // double clic
+        proposed[f.id] = Date()
+        Friends.shared.signal(["kind": "cam-call", "to": f.id])
+        Sound.shared.play("pop")
+        Friends.shared.say("Caméra proposée à \(f.name)…")
+    }
+
+    func accept(_ id: String) {
+        guard let name = invites.removeValue(forKey: id) else { return }
+        Friends.shared.signal(["kind": "cam-call-ok", "to": id])
+        startCall(id, name)
+    }
+
+    func decline(_ id: String) {
+        guard invites.removeValue(forKey: id) != nil else { return }
+        Friends.shared.signal(["kind": "cam-call-no", "to": id])
+    }
+
+    /// Passage en « ne pas déranger » : plus personne ne me regarde, sauf la caméra ensemble en cours.
+    func dndChanged() {
+        guard Store.shared.dnd else { return }
+        for id in outgoing where calls[id] == nil { js("close('out:' + \(Self.quote(id)))") }
+    }
+
+    func hangUp() {
+        for id in Array(calls.keys) {
+            Friends.shared.signal(["kind": "cam-call-end", "to": id])
+            endCall(id)
+        }
+    }
+
+    private func startCall(_ id: String, _ name: String) {
+        calls[id] = name
+        asked[id] = nil
+        failed.remove(id)
+        gaveUp[id] = nil
+        let store = Store.shared
+        if store.mode == .expanded && store.view == .friends {
+            // déjà sur l'onglet Potes
+        } else if store.writing || store.busy {  // pas sous tes doigts, ni par-dessus une demande de Claude
+            store.showToast(Toast(icon: "video.fill", color: "#F472B6", title: name, text: "caméra ensemble : clic pour voir", opens: .friends))
+        } else {
+            store.show(.friends)
+            store.pinUntil = Date().addingTimeInterval(15)
+        }
+        if viewing && settled { askAll() }
+        // Les deux messages (« d'accord », « montre-moi ») peuvent arriver dans le désordre : on redemande un peu après.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            let cam = FriendCam.shared
+            guard cam.calls[id] != nil, !cam.incoming.contains(id) else { return }
+            cam.asked[id] = nil
+            cam.askAll()
+        }
+    }
+
+    private func endCall(_ id: String) {
+        calls[id] = nil
+        if !sharing { js("close('out:' + \(Self.quote(id)))") }
+        if !(Friends.shared.list.first { $0.id == id }?.cam ?? false) { js("close('in:' + \(Self.quote(id)))") }
+    }
 
     // MARK: Réglage
 
@@ -45,7 +119,7 @@ final class FriendCam: NSObject, ObservableObject, WKScriptMessageHandler, WKUID
         UserDefaults.standard.set(on, forKey: "cam.share")
         sharing = on
         problem = nil
-        if !on { for id in outgoing { js("close('out:' + \(Self.quote(id)))") } }
+        if !on { for id in outgoing where calls[id] == nil { js("close('out:' + \(Self.quote(id)))") } }  // la caméra ensemble continue
         // Republie mon état tout de suite : les potes voient que la caméra est partagée (ou plus).
         if announce { Friends.shared.skinChanged() }
     }
@@ -79,7 +153,8 @@ final class FriendCam: NSObject, ObservableObject, WKScriptMessageHandler, WKUID
     /// Un pote a changé (caméra partagée ou plus, en ligne ou plus).
     func friendsChanged() {
         for f in Friends.shared.list {
-            if incoming.contains(f.id) && (!f.cam || !f.online) { js("close('in:' + \(Self.quote(f.id)))") }
+            if calls[f.id] != nil && !f.online { endCall(f.id) }
+            if incoming.contains(f.id) && ((!f.cam && calls[f.id] == nil) || !f.online) { js("close('in:' + \(Self.quote(f.id)))") }
             if outgoing.contains(f.id) && !f.online { js("close('out:' + \(Self.quote(f.id)))") }  // parti sans prévenir
         }
         askAll()
@@ -87,7 +162,7 @@ final class FriendCam: NSObject, ObservableObject, WKScriptMessageHandler, WKUID
 
     private func askAll() {
         guard viewing, settled, stopTimer == nil, Friends.shared.configured else { return }
-        for f in Friends.shared.list where f.cam && f.online && f.presence != .off && asked[f.id] == nil && !incoming.contains(f.id)
+        for f in Friends.shared.list where ((f.cam && !f.dnd) || calls[f.id] != nil) && f.online && f.presence != .off && asked[f.id] == nil && !incoming.contains(f.id)
             && Date().timeIntervalSince(gaveUp[f.id] ?? .distantPast) > 10 * 60 {
             asked[f.id] = Date()
             Friends.shared.signal(["kind": "cam-watch", "to": f.id])
@@ -105,6 +180,8 @@ final class FriendCam: NSObject, ObservableObject, WKScriptMessageHandler, WKUID
         stopTimer = nil  // un minuteur qui a sonné n'est pas nil : sans ça, l'onglet resterait « ouvert » pour toujours
         viewing = false
         settled = false
+        hangUp()  // onglet refermé : la caméra ensemble s'arrête
+        proposed = [:]
         for id in incoming {
             Friends.shared.signal(["kind": "cam-stop", "to": id])
             js("close('in:' + \(Self.quote(id)))")
@@ -119,6 +196,8 @@ final class FriendCam: NSObject, ObservableObject, WKScriptMessageHandler, WKUID
         incoming = []
         outgoing = []
         watchers = [:]
+        calls = [:]
+        invites = [:]
         Frames.shared.images = [:]
         refresh()
     }
@@ -127,8 +206,8 @@ final class FriendCam: NSObject, ObservableObject, WKScriptMessageHandler, WKUID
 
     func handle(_ kind: String, from id: String, name: String, _ m: [String: Any]) {
         switch kind {
-        case "cam-watch":  // un pote veut me voir
-            guard sharing else { return }
+        case "cam-watch":  // un pote veut me voir (en « ne pas déranger », seulement si on a dit oui à la caméra ensemble)
+            guard allowed(id), !Store.shared.dnd || calls[id] != nil else { return }
             outgoing.insert(id)
             watchers[id] = nil
             refresh()
@@ -139,10 +218,32 @@ final class FriendCam: NSObject, ObservableObject, WKScriptMessageHandler, WKUID
             refresh()
             js("accept(\(Self.quote(id)), \(Self.quote(sdp)))")
         case "cam-answer":
-            guard sharing, outgoing.contains(id), let sdp = Self.unpack(m["sdp"] as? String) else { return }
+            guard allowed(id), outgoing.contains(id), let sdp = Self.unpack(m["sdp"] as? String) else { return }
             js("answered(\(Self.quote(id)), \(Self.quote(sdp)))")
         case "cam-stop":
             js("close('out:' + \(Self.quote(id)))")
+        case "cam-call":  // un pote me propose la caméra
+            if Store.shared.dnd { return Friends.shared.signal(["kind": "cam-call-no", "to": id, "why": "dnd"]) }
+            invites[id] = name
+            Sound.shared.play("question")
+            Store.shared.showToast(Toast(icon: "video.fill", color: "#F472B6", title: name, text: "te propose la caméra · clic pour répondre",
+                                         opens: .friends))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 60) {  // sans réponse, la proposition s'en va
+                if FriendCam.shared.invites[id] != nil { FriendCam.shared.invites[id] = nil }
+            }
+        case "cam-call-ok":
+            guard let at = proposed.removeValue(forKey: id), Date().timeIntervalSince(at) < 120 else {
+                return Friends.shared.signal(["kind": "cam-call-end", "to": id])  // trop tard : l'autre ne reste pas « en appel »
+            }
+            Friends.shared.say("\(name) accepte : caméra en route")
+            startCall(id, name)
+        case "cam-call-no":
+            guard proposed.removeValue(forKey: id) != nil else { return }
+            Friends.shared.say(m["why"] as? String == "dnd" ? "\(name) est en « ne pas déranger »" : "\(name) ne peut pas maintenant")
+        case "cam-call-end":
+            guard calls[id] != nil else { return }
+            endCall(id)
+            Friends.shared.say("\(name) a raccroché")
         default:
             break
         }
@@ -165,7 +266,7 @@ final class FriendCam: NSObject, ObservableObject, WKScriptMessageHandler, WKUID
             case "offer", "answer":
                 guard let sdp = m["sdp"] as? String else { return }
                 // Partage décoché (ou pote parti) pendant que la caméra démarrait : l'offre ne part pas.
-                if type == "offer" && !(sharing && outgoing.contains(id)) { return js("close('out:' + \(Self.quote(id)))") }
+                if type == "offer" && !(allowed(id) && outgoing.contains(id)) { return js("close('out:' + \(Self.quote(id)))") }
                 if type == "answer" && !incoming.contains(id) { return js("close('in:' + \(Self.quote(id)))") }
                 Friends.shared.signal(["kind": "cam-" + type, "to": id, "sdp": Self.pack(sdp)])
             case "state":
@@ -201,7 +302,7 @@ final class FriendCam: NSObject, ObservableObject, WKScriptMessageHandler, WKUID
                              type: WKMediaCaptureType, decisionHandler: @escaping (WKPermissionDecision) -> Void) {
         MainActor.assumeIsolated {
             let cam = FriendCam.shared
-            decisionHandler(type == .camera && (cam.sharing || cam.test != nil) ? .grant : .deny)
+            decisionHandler(type == .camera && (cam.sharing || !cam.calls.isEmpty || cam.test != nil) ? .grant : .deny)
         }
     }
 

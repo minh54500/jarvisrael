@@ -21,6 +21,10 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         var presence: Presence
         var since: Date           // depuis quand il est dans cette présence
         var cam = false           // partage sa caméra (voir FriendCam)
+        var dnd = false           // en mode « ne pas déranger »
+        var note = ""             // son statut (« en call client »)
+        var music: String?        // ce qu'il écoute sur Spotify (« Titre — Artiste »), s'il le partage
+        var musicID: String?      // spotify:track:…, pour l'ouvrir chez soi
         let mochi: Mochi
 
         /// Hors ligne s'il l'a dit (veille, app quittée) ou sans nouvelles depuis 45 min (signe de vie toutes les 20).
@@ -45,7 +49,20 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         var mine: Bool
         /// Mes messages : « sending », « sent » ou « failed » (absent pour ceux des potes).
         var state: String?
+        /// Réactions : emoji → identifiants de ceux qui l'ont mis.
+        var reactions: [String: [String]]?
     }
+
+    static let reactionEmojis = ["👍", "😂", "❤️", "😮"]
+
+    /// Jusqu'où chaque pote a lu le chat (date du dernier message qu'il a vu) : « Vu par … ».
+    @Published private(set) var seenBy: [String: Date] = [:]
+    private var seenSent = Date.distantPast
+    /// Les potes dont je veux savoir quand ils arrivent sur leur Mac.
+    @Published private(set) var watched = Set(UserDefaults.standard.stringArray(forKey: "friends.watch") ?? [])
+    private var arrived: [String: Date] = [:]
+    private var connectedAt = Date()
+    private var musicSent: (id: String, at: Date)?
 
     @Published private(set) var list: [Friend] = []
     @Published private(set) var notice: String?
@@ -135,7 +152,10 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
             MainActor.assumeIsolated { Friends.shared.publish(force: true) }
         }
         presenceTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
-            MainActor.assumeIsolated { Friends.shared.checkPresence() }
+            MainActor.assumeIsolated {
+                Friends.shared.checkPresence()
+                Friends.shared.checkMusic()
+            }
         }
     }
 
@@ -173,7 +193,7 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
     }
 
     private var signature: String {
-        "\(current.state.rawValue)|\(presence.rawValue)|\(Skin.current.id)|\(Skin.tint ?? "")|\(name)|\(FriendCam.shared.sharing)"
+        "\(current.state.rawValue)|\(presence.rawValue)|\(Skin.current.id)|\(Skin.tint ?? "")|\(name)|\(FriendCam.shared.sharing)|\(Store.shared.dnd)|\(note)"
     }
 
     /// Au plus un message toutes les 30 s (ntfy gratuit limite le nombre de messages par jour) :
@@ -199,7 +219,8 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
     private func status() -> [String: Any] {
         ["kind": "status", "state": current.state.rawValue, "sessions": current.sessions, "skin": Skin.current.id,
          "color": Skin.tint ?? "", "presence": presence.rawValue, "since": presenceSince.timeIntervalSince1970,
-         "cam": FriendCam.shared.sharing]
+         "cam": FriendCam.shared.sharing, "dnd": Store.shared.dnd, "note": note]
+            .merging(music.map { ["music": $0.text, "musicID": $0.id] } ?? [:]) { a, _ in a }
     }
 
     /// Un cœur (« heart ») ou un coucou (« wave ») au bonhomme d'un pote.
@@ -255,7 +276,81 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         saveChat()
     }
 
-    func markRead() { if unread != 0 { unread = 0 } }
+    func markRead() {
+        if unread != 0 { unread = 0 }
+        sendSeen()
+    }
+
+    // MARK: Réactions, « vu »
+
+    /// Mettre (ou retirer) une réaction sur un message.
+    func react(_ msg: Message, _ emoji: String) {
+        guard configured else { return }
+        let on = !(msg.reactions?[emoji]?.contains(me) ?? false)
+        setReaction(msg.id, emoji, by: me, on: on)
+        post(["kind": "react", "mid": msg.id, "emoji": emoji, "on": on])
+        Sound.shared.play("tick")
+    }
+
+    private func setReaction(_ mid: String, _ emoji: String, by who: String, on: Bool) {
+        guard let i = chat.firstIndex(where: { $0.id == mid }) else { return }
+        var r = chat[i].reactions ?? [:]
+        var people = r[emoji] ?? []
+        people.removeAll { $0 == who }
+        if on { people.append(who) }
+        r[emoji] = people.isEmpty ? nil : people
+        chat[i].reactions = r.isEmpty ? nil : r
+        saveChat()
+    }
+
+    /// Le chat est sous mes yeux : je dis jusqu'où j'ai lu (au plus toutes les 20 s, seulement s'il y a du nouveau).
+    private func sendSeen() {
+        guard configured, Store.shared.chatVisible, let last = chat.last(where: { !$0.mine }), last.at > seenSent,
+              Date().timeIntervalSince(lastSeenPost) > 20 else { return }
+        seenSent = last.at
+        lastSeenPost = Date()
+        post(["kind": "seen", "at": last.at.timeIntervalSince1970])
+    }
+    private var lastSeenPost = Date.distantPast
+
+    /// Qui a vu mon dernier message.
+    func seenNames(after date: Date) -> [String] {
+        list.filter { (seenBy[$0.id] ?? .distantPast) >= date.addingTimeInterval(-3) }.map(\.name)
+    }
+
+    // MARK: Statut perso, musique, arrivées
+
+    static let noteLimit = 40
+    var note: String { String((UserDefaults.standard.string(forKey: "friends.note") ?? "").prefix(Self.noteLimit)) }
+
+    func setNote(_ text: String) {
+        let t = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.noteLimit))
+        UserDefaults.standard.set(t, forKey: "friends.note")
+        objectWillChange.send()
+        changed()
+        say(t.isEmpty ? "Statut effacé" : "Statut : « \(t) »")
+    }
+
+    /// Ce que j'écoute, si je le partage (Réglages → Potes) et que Spotify joue.
+    private var music: (text: String, id: String)? {
+        guard UserDefaults.standard.bool(forKey: "friends.music"), Spotify.shared.playing, let t = Spotify.shared.track,
+              !t.name.isEmpty else { return nil }
+        return (String((t.artist.isEmpty ? t.name : "\(t.name) — \(t.artist)").prefix(80)), t.id)
+    }
+
+    /// Un nouveau morceau : les potes le voient, mais au plus toutes les 10 min (ntfy gratuit limite les messages).
+    private func checkMusic() {
+        guard configured, let m = music, m.id != musicSent?.id,
+              Date().timeIntervalSince(musicSent?.at ?? .distantPast) > 10 * 60 else { return }
+        musicSent = (m.id, Date())
+        publish(force: true)
+    }
+
+    func toggleWatch(_ f: Friend) {
+        if watched.contains(f.id) { watched.remove(f.id) } else { watched.insert(f.id) }
+        UserDefaults.standard.set(Array(watched), forKey: "friends.watch")
+        say(watched.contains(f.id) ? "Je te préviens quand \(f.name) arrive sur son Mac" : "Plus d'alerte pour \(f.name)")
+    }
 
     private func add(_ m: Message) {
         guard !chat.contains(where: { $0.id == m.id }) else { return }
@@ -290,6 +385,7 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
     // MARK: Ce que je reçois (flux ntfy : une ligne JSON par message)
 
     private func connect() {
+        connectedAt = Date()  // les statuts rejoués à la connexion ne comptent pas comme des arrivées
         guard configured, let topic = group.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
               let url = URL(string: "\(Self.server)/\(topic)/json?since=6h") else { return }
         if stream == nil {
@@ -342,6 +438,13 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
             let skin = m["skin"] as? String, color = m["color"] as? String
             let tint = (color?.isEmpty ?? true) ? nil : color
             if let f = list.first(where: { $0.id == id }) {
+                // Arrivé sur son Mac : il était hors ligne, ou absent depuis plus de 30 min.
+                let wasHere = f.online && (f.presence == .active || Date().timeIntervalSince(f.since) < 30 * 60)
+                if fresh && !wasHere && presence == .active && watched.contains(id) && Date().timeIntervalSince(connectedAt) > 90
+                    && Date().timeIntervalSince(arrived[id] ?? .distantPast) > 30 * 60 {
+                    arrived[id] = Date()
+                    Store.shared.friendArrived(who, color: (m["color"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? f.mochi.skin.aura)
+                }
                 f.name = who
                 if let skin, skin != f.mochi.skin.id { f.mochi.skin = Skin.named(skin) }
                 f.mochi.tint = tint
@@ -350,17 +453,25 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
                 f.presence = presence
                 f.since = since
                 f.cam = m["cam"] as? Bool ?? false
+                f.dnd = m["dnd"] as? Bool ?? false
+                f.note = String((m["note"] as? String ?? "").prefix(Self.noteLimit))
+                f.music = (m["music"] as? String).map { String($0.prefix(80)) }
+                f.musicID = (m["musicID"] as? String).flatMap { $0.hasPrefix("spotify:track:") ? $0 : nil }
                 if f.state != state { f.state = state; f.mochi.setState(state) }
             } else {
                 let f = Friend(id: id, name: who, state: state, sessions: sessions, seen: at, presence: presence,
                                since: since, skin: skin, tint: tint)
                 f.cam = m["cam"] as? Bool ?? false
+                f.dnd = m["dnd"] as? Bool ?? false
+                f.note = String((m["note"] as? String ?? "").prefix(Self.noteLimit))
+                f.music = (m["music"] as? String).map { String($0.prefix(80)) }
+                f.musicID = (m["musicID"] as? String).flatMap { $0.hasPrefix("spotify:track:") ? $0 : nil }
                 list.append(f)
             }
             list.sort { ($0.online ? 0 : 1, $0.name) < ($1.online ? 0 : 1, $1.name) }
             objectWillChange.send()
             FriendCam.shared.friendsChanged()
-        case "cam-watch", "cam-offer", "cam-answer", "cam-stop":
+        case "cam-watch", "cam-offer", "cam-answer", "cam-stop", "cam-call", "cam-call-ok", "cam-call-no", "cam-call-end":
             guard m["to"] as? String == me, Date().timeIntervalSince(at) < 60 else { return }
             FriendCam.shared.handle(m["kind"] as? String ?? "", from: id, name: who, m)
         case "poke":
@@ -377,6 +488,13 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
                 let f = list.first { $0.id == id }
                 Store.shared.chatReceived(from: who, color: f?.mochi.tint ?? f?.mochi.skin.aura ?? "#FF8BC4", text: body)
             }
+        case "react":
+            guard let mid = m["mid"] as? String, let emoji = m["emoji"] as? String, Self.reactionEmojis.contains(emoji) else { return }
+            setReaction(mid, emoji, by: id, on: m["on"] as? Bool ?? true)
+        case "seen":
+            guard let t = m["at"] as? Double else { return }
+            let date = Date(timeIntervalSince1970: t)
+            if date > (seenBy[id] ?? .distantPast) { seenBy[id] = date }
         default:
             break
         }
@@ -410,7 +528,7 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         return mine.merging(FriendCam.shared.diagnose()) { a, _ in a }
     }
 
-    private func say(_ text: String) {
+    func say(_ text: String) {
         notice = text
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { if self.notice == text { self.notice = nil } }
     }

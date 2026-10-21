@@ -268,7 +268,7 @@ extension Store {
     /// Un rappel (pause, eau, nuit, batterie, chaleur). Refusé (false) si on est occupé :
     /// il reviendra au prochain passage.
     func remind(_ r: Reminder) -> Bool {
-        guard !busy else { return false }
+        guard !busy, !dnd else { return false }  // ne pas déranger : le rappel attend la fin du mode
         reminder = r
         switch r {
         case .pause, .night: mochi.emote(.yawn, 2.4)
