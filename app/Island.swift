@@ -46,6 +46,7 @@ struct IslandRoot: View {
         let radius = store.mode == .expanded ? 30.0 : store.mode == .peek ? 20.0 : store.mode == .compact ? 14.0 : 10.0
         ZStack(alignment: .top) {
             CamHost()  // la caméra entre potes, sous le noir de l'encoche
+            QuickDropsView(store: store)  // les gouttes, qui sortent de sous l'encoche ouverte
             IslandShape(flare: flare, radius: radius)
                 .fill(Color.black)
                 .frame(width: size.width + 2 * flare, height: size.height)
@@ -80,6 +81,7 @@ struct IslandRoot: View {
             .clipShape(IslandShape(flare: 0, radius: radius))
         }
         .frame(width: Store.panelSize.width, height: Store.panelSize.height, alignment: .top)
+        .onChange(of: store.mode == .expanded) { _, open in QuickDropsMotion.shared.setVisible(open) }
     }
 }
 
@@ -367,8 +369,10 @@ struct IslandContent: View {
                 }
             }
             .id(store.view)
-            .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .top)).animation(.easeOut(duration: 0.26).delay(0.1)),
-                                    removal: .opacity.animation(.easeIn(duration: 0.1))))
+            // Fondu enchaîné : le nouvel écran arrive pendant que l'ancien part, sans moment vide entre les deux
+            // (avant, la carte « s'éteignait » un dixième de seconde à chaque changement d'onglet).
+            .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.985, anchor: .top)).animation(.easeOut(duration: 0.2)),
+                                    removal: .opacity.animation(.easeIn(duration: 0.26))))
             .padding(.top, store.cardTop)
             .padding([.horizontal, .bottom], 10)
         }
@@ -400,15 +404,6 @@ struct IslandContent: View {
                 }
                 .padding(.trailing, 6)
             }
-            Button { store.setDND(!store.dnd) } label: {
-                Image(systemName: store.dnd ? "moon.fill" : "moon")
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(store.dnd ? Color(hex: "#A78BFA") : Color.muted)
-                    .contentTransition(.symbolEffect(.replace))
-            }
-            .buttonStyle(IconButton())
-            .help(store.dnd ? "Ne pas déranger : activé (clic pour le couper)" : "Ne pas déranger : messages et cœurs des potes sans bulle ni son, rappels en pause")
-            .accessibilityLabel(store.dnd ? "Couper ne pas déranger" : "Activer ne pas déranger")
             Button {
                 Sound.shared.on.toggle()
                 store.objectWillChange.send()
@@ -420,10 +415,6 @@ struct IslandContent: View {
             }
             .buttonStyle(IconButton())
             .help(Sound.shared.on ? "Couper le son" : "Activer le son")
-            Button { SettingsWindow.show() } label: { Image(systemName: "gearshape.fill").font(.system(size: 11.5, weight: .semibold)) }
-                .buttonStyle(IconButton())
-                .help("Réglages")
-                .accessibilityLabel("Réglages")
             Button { store.close() } label: { Image(systemName: "xmark").font(.system(size: 11, weight: .bold)) }
                 .buttonStyle(IconButton())
                 .help("Fermer l'encoche")

@@ -50,27 +50,32 @@ struct OverviewPanel: View {
             }
             .frame(width: 356)
             Card {
+                // Deux sessions au plus : avec le modèle et la jauge d'usage, tout tient dans l'encoche.
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(store.sessions.prefix(3)) { s in
+                    ForEach(store.sessions.prefix(2)) { s in
                         SessionRow(session: s, chosen: s.id == store.focused?.id, state: StatePill.label(s.state)) { store.select(s) }
                     }
-                    if store.sessions.count > 3 {
-                        Text("+\(store.sessions.count - 3) autre\(store.sessions.count > 4 ? "s" : "")").font(Fonts.caption).foregroundStyle(Color.faint)
+                    if store.sessions.count > 2 {
+                        Button("+\(store.sessions.count - 2) autre\(store.sessions.count > 3 ? "s" : "")") { store.goTo(.projects) }
+                            .buttonStyle(.plain).font(Fonts.caption).foregroundStyle(Color.faint)
+                            .help(store.sessions.dropFirst(2).map(\.name).joined(separator: ", "))
                     }
-                    Spacer(minLength: 2)
+                    Spacer(minLength: 6)
                     HStack(spacing: 6) {
                         ModelMenu(store: store)
                         if let n = store.focused?.agents.count, n > 0 {
-                            Label("\(n) agent\(n > 1 ? "s" : "")", systemImage: "person.2.wave.2.fill")
+                            Label("\(n)", systemImage: "person.2.wave.2.fill")
                                 .font(Fonts.caption.weight(.semibold)).foregroundStyle(Color(hex: "#7CC7FF"))
-                                .help(store.focused?.agents.values.sorted().joined(separator: ", ") ?? "")
+                                .fixedSize()
+                                .help("\(n) agent\(n > 1 ? "s" : "") au travail : " + (store.focused?.agents.values.sorted().joined(separator: ", ") ?? ""))
                         }
                         Spacer(minLength: 0)
                         NewMenu(store: store)
                     }
-                    UsageStrip()
+                    UsageStrip().padding(.top, 2)
                 }
-                .padding(10)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 9)
                 .frame(maxHeight: .infinity, alignment: .top)
             }
         }

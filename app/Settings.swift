@@ -130,6 +130,7 @@ private struct SettingsView: View {
     @ObservedObject private var cam = FriendCam.shared
     @AppStorage("friends.music") private var musicShare = false
     @AppStorage("annotate") private var annotate = true
+    @ObservedObject private var awake = Awake.shared
     @AppStorage("openIn") private var openIn = OpenIn.vscode
     @ObservedObject private var updater = Updater.shared
     @ObservedObject private var selection = SettingsWindow.Selection.shared
@@ -148,6 +149,16 @@ private struct SettingsView: View {
                     get: { store.hiddenInShares },
                     set: { UserDefaults.standard.set($0, forKey: "privacy.hide"); store.applyPrivacy($0); store.objectWillChange.send() }))
                 Toggle("Annoter mes captures avant de les envoyer", isOn: $annotate)
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Garder le Mac éveillé capot fermé")
+                        Text(awake.lidReady ? "Installé : la goutte « tasse » peut garder le Mac éveillé même capot fermé."
+                             : "Demande ton mot de passe une fois (règle limitée à « pmset disablesleep »).")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if awake.lidReady { Button("Retirer") { awake.removeRule() } } else { Button("Installer") { awake.setLidMode(true) } }
+                }
                 Picker("Nouvelles sessions Claude Code dans", selection: $openIn) {
                     ForEach(OpenIn.allCases) { Text($0.name).tag($0) }
                 }

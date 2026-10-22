@@ -48,7 +48,7 @@ EOF
 if security find-certificate -c "Encoche Dev" >/dev/null 2>&1; then SIGN="Encoche Dev"; else SIGN=-; fi
 codesign --force --deep -s "$SIGN" $APP 2>/dev/null || { SIGN=-; codesign --force --deep -s - $APP 2>/dev/null || true; }
 
-osascript -e 'quit app "Encoche"' 2>/dev/null || true
+osascript -e 'quit app id "io.github.minh54500.encoche"' 2>/dev/null || true
 mkdir -p ~/Applications
 rm -rf ~/Applications/Encoche.app
 cp -R $APP ~/Applications/

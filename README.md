@@ -13,6 +13,8 @@ Un petit bonhomme qui vit dans l'encoche de ton Mac et garde un œil sur Claude 
 - **Sous-agents et mémoire** : combien d'agents travaillent, et quand Claude compresse sa mémoire.
 - **Écris à Claude sans quitter ce que tu fais** : ⌥Espace ouvre l'encoche prête à écrire, ⌥⇧Espace pour dicter.
 - **VS Code ou l'app Claude, au choix** : « + Nouveau » ouvre une conversation, une session Claude Code ou Cowork dans l'[app Claude](https://claude.ai/download) avec ton message déjà écrit, ou une session Claude Code dans VS Code. Projets récents et les Réglages retiennent où ouvrir les nouvelles sessions.
+- **Les gouttes** autour de l'encoche ouverte, qui sortent de ses bords : capture, miroir, garder le Mac éveillé, Réglages, ne pas déranger, lecture/pause de la musique.
+- **Garder le Mac éveillé** 30 min, 1 h, 2 h, 4 h ou sans limite, et au choix **même capot fermé** (mot de passe une fois ; tout redevient normal à la fin, à la fermeture d'Encoche, après un plantage, ou sur batterie faible).
 - **Prompts favoris** en un clic (« Continue », « Lance les tests »…), **choix du modèle**, et un **bilan de fin** : fichiers modifiés, lignes, tokens.
 - **Étagère** pour garder des fichiers sous la main, **historique du presse-papiers**, **capture d'écran** envoyée à Claude.
 - **Onglet Outils** :
@@ -88,3 +90,7 @@ git clone https://github.com/minh54500/jarvisrael.git encoche
 cd encoche
 ./build.sh
 ```
+
+## Licence et crédits
+
+Encoche est sous licence [GPL-3.0](LICENSE). Une partie de ses fonctions vient de [Vorssaint](https://github.com/vorssaint/vorssaint-utils) (GPL-3.0), avec l'accord de son auteur : merci à lui. Les fichiers repris le disent en tête.

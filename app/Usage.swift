@@ -59,7 +59,7 @@ final class Usage: ObservableObject {
         }
     }
 
-    private func update(_ five: Window?, _ seven: Window?) {
+    func update(_ five: Window?, _ seven: Window?) {
         fiveHour = five ?? fiveHour
         week = seven ?? week
         updated = Date()

@@ -60,7 +60,8 @@ final class Store: ObservableObject {
 
     // MARK: Géométrie (repère de l'island, en points)
 
-    static let panelSize = CGSize(width: 760, height: 320)
+    /// Transparent et sans clic hors de ce qui est dessiné : la place autour de l'encoche ouverte sert aux gouttes.
+    static let panelSize = CGSize(width: 920, height: 380)
     static let expandedWidth = 640.0
     /// Ouverture : ressort avec léger dépassement (la courbe --spr du prototype).
     static let openAnimation = Animation.spring(response: 0.48, dampingFraction: 0.74)
@@ -73,17 +74,17 @@ final class Store: ObservableObject {
     var viewHeight: Double {
         let base: Double = switch view {
         case .greeting: 150
-        case .overview: 226
+        case .overview: 232
         case .empty: 150
         case .approval: currentPermission?.kind == .plan ? 262 : currentPermission?.kind == .question ? 232 : 206
         case .finished: focused?.turn == nil ? 176 : (focused?.turn?.files.isEmpty ?? true) ? 196 : 226
         case .error, .choose: 176
-        case .dev: tool == .servers ? 206 : tool == .mirror ? 230 : 250
+        case .dev: tool == .servers ? 206 : tool == .mirror ? 246 : 250
         case .care: 164
         case .todos: 216
-        case .friends: friendsShowsChat ? 240 : 206
+        case .friends: friendsShowsChat ? 240 : 220
         case .projects, .recap: 262
-        case .welcome: 214
+        case .welcome: 228
         case .upload: 176
         case .shelf: 190
         case .music: 196

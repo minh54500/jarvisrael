@@ -48,7 +48,10 @@ final class NotchPanel: NSPanel {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// App quittée : les potes nous voient hors ligne tout de suite.
     func applicationWillTerminate(_ notification: Notification) {
-        MainActor.assumeIsolated { Friends.shared.goOffline() }
+        MainActor.assumeIsolated {
+            Friends.shared.goOffline()
+            Awake.shared.stopForQuit()  // le Mac retrouve sa veille normale
+        }
     }
 
     private var panel: NotchPanel!
@@ -63,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        MainActor.assumeIsolated { Awake.shared.recover() }  // un plantage a pu laisser le Mac sans veille capot fermé
         noNap = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
                                                       reason: "Animation de l'encoche")
         // Sons rendus en tâche de fond, moteur audio prêt avant la première animation.
@@ -193,7 +197,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let target = store.islandTarget
         var hit = CGRect(x: f.width / 2 - target.width / 2, y: 0, width: target.width, height: target.height)
         if store.mode != .expanded { hit = hit.insetBy(dx: -8, dy: 0); hit.size.height += 4 }
-        let inside = hit.contains(p) && m.y <= f.maxY + 2
+        // Encoche ouverte : les gouttes autour comptent aussi.
+        let onDrop = store.mode == .expanded && QuickDropsLayout.hitRects().contains { $0.contains(p) }
+        let inside = (hit.contains(p) || onDrop) && m.y <= f.maxY + 2
         if panel.ignoresMouseEvents == inside { panel.ignoresMouseEvents = !inside }
         store.setHover(inside)
         store.watchdog()
