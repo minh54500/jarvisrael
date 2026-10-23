@@ -128,12 +128,22 @@ private struct SettingsView: View {
     @AppStorage("friends.name") private var friendsName = ""
     @AppStorage("friends.group") private var friendsGroup = ""
     @ObservedObject private var cam = FriendCam.shared
+    @ObservedObject private var friends = Friends.shared
+    @State private var joinCode = ""
+    @State private var joinError = false
+    @State private var leaving: Friends.Crew?
     @AppStorage("friends.music") private var musicShare = false
     @AppStorage("annotate") private var annotate = true
     @ObservedObject private var awake = Awake.shared
     @AppStorage("openIn") private var openIn = OpenIn.vscode
     @ObservedObject private var updater = Updater.shared
     @ObservedObject private var selection = SettingsWindow.Selection.shared
+
+    private func joinCrew() {
+        guard friends.join(joinCode) else { joinError = true; return }
+        joinCode = ""
+        if !friendsOn { friendsOn = true }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -309,18 +319,50 @@ private struct SettingsView: View {
             Section("Entre potes") {
                 Toggle("Partager mon bonhomme avec mes potes", isOn: $friendsOn)
                 TextField("Ton pseudo", text: $friendsName, prompt: Text("Ton prénom ou un surnom"))
-                HStack {
-                    TextField("Code du groupe", text: $friendsGroup).textFieldStyle(.roundedBorder)
-                    Button("Créer") { friendsGroup = Friends.newGroup(); friendsOn = true }
-                    Button("Copier") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(friendsGroup, forType: .string)
+                // Mes groupes : un seul branché (le rond plein), chacun avec son code et son chat.
+                ForEach(friends.crews) { c in
+                    HStack(spacing: 8) {
+                        Button { friends.use(c.code) } label: {
+                            Image(systemName: c.code == friendsGroup ? "largecircle.fill.circle" : "circle")
+                                .foregroundStyle(c.code == friendsGroup ? Color.accentColor : .secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help(c.code == friendsGroup ? "Groupe branché" : "Brancher ce groupe")
+                        .accessibilityLabel(c.code == friendsGroup ? "\(c.name), groupe branché" : "Brancher \(c.name)")
+                        TextField("Nom du groupe", text: Binding(get: { c.name }, set: { friends.rename(c.code, to: $0) }))
+                            .textFieldStyle(.roundedBorder).frame(width: 130)
+                        Text(c.code).font(.caption.monospaced()).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                        Spacer(minLength: 0)
+                        Button("Copier le code") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(c.code, forType: .string)
+                        }
+                        Button { leaving = c } label: { Image(systemName: "trash") }
+                            .buttonStyle(.borderless)
+                            .help("Quitter ce groupe")
+                            .accessibilityLabel("Quitter \(c.name)")
                     }
-                    .disabled(friendsGroup.isEmpty)
+                }
+                HStack {
+                    TextField("Code reçu d'un pote", text: $joinCode).textFieldStyle(.roundedBorder)
+                        .onSubmit(joinCrew)
+                        .onChange(of: joinCode) { _, _ in joinError = false }
+                    Button("Rejoindre", action: joinCrew)
+                        .disabled(joinCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("Créer un groupe") {
+                        friends.createCrew()
+                        if !friendsOn { friendsOn = true }
+                    }
+                }
+                if joinError {
+                    Text("Ce code n'est pas valable : lettres, chiffres, - et _ seulement, sans espace.")
+                        .font(.caption).foregroundStyle(.red)
                 }
                 Toggle("Montrer à mes potes ce que j'écoute sur Spotify", isOn: $musicShare)
                     .onChange(of: musicShare) { _, _ in Friends.shared.skinChanged() }
-                Text("Crée un groupe et envoie le code à tes potes : ils le collent ici. Sont partagés, via ntfy.sh : ton pseudo, "
+                Text("Crée un groupe et envoie son code à tes potes, ou colle le code qu'ils t'ont donné. Tu peux en avoir plusieurs "
+                     + "(potes, famille…) : un seul est branché à la fois, chacun garde son chat. Sont partagés, via ntfy.sh : ton pseudo, "
                      + "ton bonhomme et son humeur, si tu es sur ton Mac, « ne pas déranger », ton statut, si ta caméra est partagée "
                      + "et, si tu le coches, ce que tu écoutes. Jamais tes projets ni tes messages à Claude.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -329,7 +371,14 @@ private struct SettingsView: View {
                 if on && friendsName.isEmpty { friendsName = NSFullUserName().components(separatedBy: " ").first ?? "" }
                 Friends.shared.restart()
             }
-            .onChange(of: friendsGroup) { _, _ in Friends.shared.restartSoon() }
+            .confirmationDialog("Quitter « \(leaving?.name ?? "") » ?", isPresented: Binding(get: { leaving != nil }, set: { if !$0 { leaving = nil } })) {
+                Button("Quitter le groupe", role: .destructive) {
+                    if let c = leaving { friends.leave(c.code) }
+                    leaving = nil
+                }
+            } message: {
+                Text("Son chat est effacé de ce Mac. Tes potes gardent le groupe : pour revenir, recolle son code.")
+            }
             .onChange(of: friendsName) { _, _ in Friends.shared.restartSoon() }
 
             Section("Caméra entre potes") {

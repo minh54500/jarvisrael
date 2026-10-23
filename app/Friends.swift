@@ -55,6 +55,16 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
 
     static let reactionEmojis = ["👍", "😂", "❤️", "😮"]
 
+    /// Un groupe : son nom (rien que chez moi) et son code (le sujet ntfy partagé avec ses membres).
+    struct Crew: Codable, Identifiable, Equatable {
+        var name: String
+        let code: String
+        var id: String { code }
+    }
+
+    /// Mes groupes. Un seul est branché à la fois : celui dont le code est dans « friends.group ».
+    @Published private(set) var crews: [Crew] = []
+
     /// Jusqu'où chaque pote a lu le chat (date du dernier message qu'il a vu) : « Vu par … ».
     @Published private(set) var seenBy: [String: Date] = [:]
     private var seenSent = Date.distantPast
@@ -97,13 +107,26 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
     private var lastPoke = Date.distantPast
     private var restartTimer: Timer?
 
+    /// Le groupe dont `chat` est le chat (chaque groupe garde le sien).
+    private var chatGroup = ""
+
     override init() {
         super.init()
-        if let data = UserDefaults.standard.data(forKey: "friends.chat"),
-           let saved = try? JSONDecoder().decode([Message].self, from: data) {
-            // Un envoi coupé par la fermeture de l'app n'est jamais parti.
-            chat = saved.map { var m = $0; if m.state == "sending" { m.state = "failed" }; return m }
+        let d = UserDefaults.standard
+        crews = d.data(forKey: "friends.groups").flatMap { try? JSONDecoder().decode([Crew].self, from: $0) } ?? []
+        // Avant les groupes multiples : un seul code, un seul chat. On les range sous ce groupe.
+        if crews.isEmpty && !group.isEmpty {
+            d.set(group, forKey: "friends.group")  // un ancien code collé avec une espace
+            crews = [Crew(name: "Mes potes", code: group)]
+            saveCrews()
         }
+        if let old = d.data(forKey: "friends.chat") {
+            if let g = d.string(forKey: "friends.chatGroup"), !g.isEmpty { d.set(old, forKey: "friends.chat.\(g)") }
+            d.removeObject(forKey: "friends.chat")
+            d.removeObject(forKey: "friends.chatGroup")
+        }
+        chatGroup = group
+        chat = loadChat(group)
         let ws = NSWorkspace.shared.notificationCenter
         ws.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { Friends.shared.goOffline() }
@@ -135,12 +158,13 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         list = []
         sent = nil
         FriendCam.shared.closeAll()
-        // Autre groupe : on repart d'un chat vide.
-        if UserDefaults.standard.string(forKey: "friends.chatGroup") != group {
-            UserDefaults.standard.set(group, forKey: "friends.chatGroup")
-            chat = []
+        // Autre groupe : on reprend son chat à lui.
+        if chatGroup != group {
+            chatGroup = group
+            chat = loadChat(group)
             unread = 0
-            saveChat()
+            seenBy = [:]
+            seenSent = .distantPast
         }
         guard configured else { return }
         // La vraie présence (pas « présent » d'office) : relancer l'app pendant une pause n'est pas une arrivée.
@@ -156,6 +180,66 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
             // (Le morceau en cours part avec le prochain statut : rien de forcé, ntfy gratuit limite les messages.)
             MainActor.assumeIsolated { Friends.shared.checkPresence() }
         }
+    }
+
+    // MARK: Groupes
+
+    /// Un code de groupe valable : ce que ntfy accepte comme sujet.
+    static func validCode(_ code: String) -> Bool {
+        code.range(of: "^[-_A-Za-z0-9]{1,64}$", options: .regularExpression) != nil
+    }
+
+    /// Crée un groupe et le branche.
+    func createCrew() {
+        join(Self.newGroup())
+    }
+
+    /// Ajoute le groupe d'un code reçu d'un pote et le branche (déjà là : il est juste branché).
+    @discardableResult
+    func join(_ raw: String) -> Bool {
+        let code = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard Self.validCode(code) else { return false }
+        if !crews.contains(where: { $0.code == code }) {
+            crews.append(Crew(name: crews.isEmpty ? "Mes potes" : "Groupe \(crews.count + 1)", code: code))
+            saveCrews()
+        }
+        use(code)
+        return true
+    }
+
+    /// Branche un autre groupe : ses potes, son chat.
+    func use(_ code: String) {
+        guard code != group else { return }
+        // L'ancien groupe me voit partir (et ses caméras ensemble raccrochent) : sinon j'y resterais « sur mon Mac »
+        // jusqu'à 45 min. `post` vise encore l'ancien groupe ici.
+        if configured { FriendCam.shared.hangUp(); presence = .off; post(status()) }
+        UserDefaults.standard.set(code, forKey: "friends.group")
+        restart()
+        if let c = crews.first(where: { $0.code == code }), configured { say("Groupe « \(c.name) »") }
+    }
+
+    func rename(_ code: String, to name: String) {
+        guard let i = crews.firstIndex(where: { $0.code == code }) else { return }
+        crews[i].name = String(name.prefix(24))
+        saveCrews()
+    }
+
+    /// Quitte un groupe : il disparaît de ma liste avec son chat (les autres membres le gardent).
+    func leave(_ code: String) {
+        crews.removeAll { $0.code == code }
+        saveCrews()
+        UserDefaults.standard.removeObject(forKey: "friends.chat.\(code)")
+        if code == group {
+            if configured { goOffline() }  // les potes de ce groupe me voient partir
+            UserDefaults.standard.set(crews.first?.code ?? "", forKey: "friends.group")
+            restart()
+        }
+    }
+
+    var currentCrew: Crew? { crews.first { $0.code == group } }
+
+    private func saveCrews() {
+        if let data = try? JSONEncoder().encode(crews) { UserDefaults.standard.set(data, forKey: "friends.groups") }
     }
 
     // MARK: Ce que je partage
@@ -374,7 +458,15 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
     }
 
     private func saveChat() {
-        if let data = try? JSONEncoder().encode(chat) { UserDefaults.standard.set(data, forKey: "friends.chat") }
+        guard !chatGroup.isEmpty, let data = try? JSONEncoder().encode(chat) else { return }
+        UserDefaults.standard.set(data, forKey: "friends.chat.\(chatGroup)")
+    }
+
+    private func loadChat(_ code: String) -> [Message] {
+        guard let data = UserDefaults.standard.data(forKey: "friends.chat.\(code)"),
+              let saved = try? JSONDecoder().decode([Message].self, from: data) else { return [] }
+        // Un envoi coupé par la fermeture de l'app ou un changement de groupe n'est jamais parti.
+        return saved.map { var m = $0; if m.state == "sending" { m.state = "failed" }; return m }
     }
 
     private func post(_ fields: [String: Any], then done: ((Bool) -> Void)? = nil) {

@@ -30,6 +30,7 @@ struct FriendsPanel: View {
                                 Sound.shared.play("tick")
                                 withAnimation(Store.openAnimation) { store.friendsShowsChat = on }
                             }
+                            if friends.crews.count > 1 { CrewMenu(friends: friends) }
                             if let n = friends.notice {
                                 Text(n).font(Fonts.label.weight(.medium)).foregroundStyle(Color(hex: "#FF9ECF")).lineLimit(1)
                             } else if !cam.calls.isEmpty {
@@ -148,6 +149,42 @@ extension FriendsPanel {
         .help(inCall ? "Caméra ensemble en cours : clic pour raccrocher"
               : cam.sharing ? "Ta caméra est partagée : clic pour la couper" : "Partager ta caméra avec tes potes")
         .accessibilityLabel(inCall ? "Raccrocher" : cam.sharing ? "Couper le partage de ma caméra" : "Partager ma caméra")
+    }
+}
+
+/// Le groupe branché, et les autres à brancher d'un clic (avec au moins deux groupes).
+struct CrewMenu: View {
+    @ObservedObject var friends: Friends
+    @State private var hover = false
+
+    var body: some View {
+        Menu {
+            ForEach(friends.crews) { c in
+                Button { friends.use(c.code) } label: {
+                    if c.code == friends.group { Label(c.name, systemImage: "checkmark") } else { Text(c.name) }
+                }
+            }
+            Divider()
+            Button("Gérer les groupes…") { SettingsWindow.show(.friends) }
+        } label: {
+            HStack(spacing: 3) {
+                Text(friends.currentCrew?.name ?? "Groupe").lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
+            }
+            .font(Fonts.caption.weight(.medium))
+            .foregroundStyle(hover ? Color.ink : Color.soft)
+            .padding(.horizontal, 8)
+            .frame(maxWidth: 120, minHeight: 22, maxHeight: 22)
+            .background(Capsule().fill(.white.opacity(hover ? 0.12 : 0.07)))
+            .contentShape(Capsule())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .onHover { hover = $0 }
+        .help("Groupe branché : clic pour passer à un autre")
+        .accessibilityLabel("Groupe : \(friends.currentCrew?.name ?? "aucun")")
     }
 }
 
