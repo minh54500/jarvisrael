@@ -13,7 +13,8 @@ rm -rf build && mkdir -p $APP/Contents/MacOS $RES
 # que les outils 27 livrent encore.
 SDK=$(xcrun --show-sdk-path)
 PLUGINS=${$(xcrun -f swiftc):h:h}/lib/swift/host/plugins
-uses_state_macro() { grep -rqs "SwiftUIMacros" $1/System/Library/Frameworks/SwiftUI.framework/Modules }
+# (sur macOS 27, la déclaration est dans SwiftUICore ; « SwiftUIMacros » seul apparaît aussi dans les anciens SDK)
+uses_state_macro() { grep -rqs "StateMacro" $1/System/Library/Frameworks/SwiftUI{,Core}.framework/Modules/ }
 if [[ ! -e $PLUGINS/libSwiftUIMacros.dylib ]] && uses_state_macro $SDK; then
   SDK=""
   for s in $(print -l ${SDK_DIR:-$(xcode-select -p)}/SDKs/MacOSX[0-9]*.sdk(N) | sort -rV); do
