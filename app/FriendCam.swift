@@ -41,6 +41,7 @@ final class FriendCam: NSObject, ObservableObject, WKScriptMessageHandler, WKUID
     @Published private(set) var invites: [String: String] = [:]  // potes qui me proposent la caméra : id → nom
     @Published private(set) var calls: [String: String] = [:]    // caméra ensemble en cours : id → nom
     private var proposed: [String: Date] = [:]                    // potes à qui je l'ai proposée
+    private var offered: [String: Date] = [:]                     // pote → ma caméra part vers lui depuis
 
     /// Ma caméra peut partir vers ce pote : je la partage à tous, ou on a dit oui à la caméra ensemble.
     private func allowed(_ id: String) -> Bool { sharing || calls[id] != nil }
@@ -99,7 +100,9 @@ final class FriendCam: NSObject, ObservableObject, WKScriptMessageHandler, WKUID
         }
         if viewing && settled { askAll() }
         // Les deux messages (« d'accord », « montre-moi ») peuvent arriver dans le désordre : on redemande un peu après.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+        // Pas avant 8 s : l'offre du pote (caméra qui s'allume, adresses à réunir) met 3 à 5 s à arriver, et une
+        // seconde demande pendant ce temps lui fait remplacer sa connexion par une autre, que ma réponse ne vise plus.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
             let cam = FriendCam.shared
             guard cam.calls[id] != nil, !cam.incoming.contains(id) else { return }
             cam.asked[id] = nil
@@ -208,6 +211,10 @@ final class FriendCam: NSObject, ObservableObject, WKScriptMessageHandler, WKUID
         switch kind {
         case "cam-watch":  // un pote veut me voir (en « ne pas déranger », seulement si on a dit oui à la caméra ensemble)
             guard allowed(id), !Store.shared.dnd || calls[id] != nil else { return }
+            // Demande en double pendant que mon offre est en route (un pote sur une ancienne version redemande
+            // au bout de 2,5 s) : la refaire casserait la connexion qu'il est en train de recevoir.
+            if outgoing.contains(id) && Date().timeIntervalSince(offered[id] ?? .distantPast) < 10 { return }
+            offered[id] = Date()
             outgoing.insert(id)
             watchers[id] = nil
             refresh()
@@ -451,7 +458,7 @@ final class FriendCam: NSObject, ObservableObject, WKScriptMessageHandler, WKUID
     // Un pote veut me voir : ma caméra part vers lui.
     async function offer(id) {
       const key = 'out:' + id;
-      close(key);
+      close(key, true);
       try {
         const stream = await camera();
         const pc = new RTCPeerConnection({iceServers: ICE});
@@ -478,7 +485,7 @@ final class FriendCam: NSObject, ObservableObject, WKScriptMessageHandler, WKUID
     // L'image d'un pote arrive : elle est recopiée 10 fois par seconde vers l'encoche.
     async function accept(id, sdp) {
       const key = 'in:' + id;
-      close(key);
+      close(key, true);
       const pc = new RTCPeerConnection({iceServers: ICE});
       const video = document.createElement('video');
       video.muted = true; video.playsInline = true; video.autoplay = true;
@@ -510,13 +517,16 @@ final class FriendCam: NSObject, ObservableObject, WKScriptMessageHandler, WKUID
       ctx.drawImage(v, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
       post({type: 'frame', id, data: canvas.toDataURL('image/jpeg', 0.72)});
     }
-    function close(key) {
+    // replaced : une nouvelle connexion prend sa place. L'app n'en est pas prévenue (sinon elle rayerait le pote
+    // au moment où la nouvelle démarre) et la caméra reste allumée.
+    function close(key, replaced) {
       const p = peers[key];
       if (!p) return;
       delete peers[key];
       clearInterval(p.timer);
       try { p.pc.close(); } catch (e) {}
       if (p.video) { p.video.srcObject = null; p.video.remove(); }
+      if (replaced) return;
       post({type: 'closed', key});
       if (key.startsWith('out:')) cameraOffIfIdle();
     }
