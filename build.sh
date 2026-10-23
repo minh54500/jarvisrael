@@ -8,12 +8,31 @@ APP=build/Encoche.app
 RES=$APP/Contents/Resources
 
 rm -rf build && mkdir -p $APP/Contents/MacOS $RES
-swiftc -O -parse-as-library -swift-version 5 -target $(uname -m)-apple-macos14 \
-  app/**/*.swift -o $APP/Contents/MacOS/Encoche 2>&1 | grep -E "error" || true
+# macOS 27 : @State devient une macro dont le module n'est livré qu'avec Xcode, pas avec les outils
+# gratuits (Command Line Tools). Dans ce cas on compile avec le plus récent SDK d'avant (macOS 26…),
+# que les outils 27 livrent encore.
+SDK=$(xcrun --show-sdk-path)
+PLUGINS=${$(xcrun -f swiftc):h:h}/lib/swift/host/plugins
+uses_state_macro() { grep -rqs "SwiftUIMacros" $1/System/Library/Frameworks/SwiftUI.framework/Modules }
+if [[ ! -e $PLUGINS/libSwiftUIMacros.dylib ]] && uses_state_macro $SDK; then
+  SDK=""
+  for s in $(print -l ${SDK_DIR:-$(xcode-select -p)}/SDKs/MacOSX[0-9]*.sdk(N) | sort -rV); do
+    uses_state_macro $s || { SDK=$s; break; }
+  done
+  if [[ -z $SDK ]]; then
+    echo "✗ Ce Mac n'a pas de quoi compiler Encoche : installe Xcode depuis l'App Store, ouvre-le une fois,"
+    echo "  puis lance « sudo xcode-select -s /Applications/Xcode.app » et relance l'installation."
+    exit 1
+  fi
+fi
+
+LOG=$(swiftc -O -parse-as-library -swift-version 5 -sdk $SDK -target $(uname -m)-apple-macos14 \
+  app/**/*.swift -o $APP/Contents/MacOS/Encoche 2>&1) || true
+print -r -- "$LOG" | grep -E "error" || true
 [[ -x $APP/Contents/MacOS/Encoche ]] || { echo "✗ La compilation a échoué"; exit 1; }
 
 # Icône : le Mochi lui-même, dessiné par le code de l'app
-swiftc -O -parse-as-library -swift-version 5 app/Util.swift app/Skins.swift app/Mochi.swift tools/icon.swift -o build/icon 2>&1 | grep -E "error" || true
+swiftc -O -parse-as-library -swift-version 5 -sdk $SDK app/Util.swift app/Skins.swift app/Mochi.swift tools/icon.swift -o build/icon 2>&1 | grep -E "error" || true
 build/icon build/Encoche.iconset
 iconutil -c icns build/Encoche.iconset -o $RES/Encoche.icns
 

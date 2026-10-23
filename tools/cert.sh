@@ -20,8 +20,11 @@ basicConstraints = critical,CA:false
 keyUsage = critical,digitalSignature
 extendedKeyUsage = critical,codeSigning
 CNF
-openssl req -x509 -newkey rsa:2048 -nodes -keyout $TMP/key.pem -out $TMP/cert.pem -days 3650 -config $TMP/cert.cnf 2>/dev/null
-openssl pkcs12 -export -inkey $TMP/key.pem -in $TMP/cert.pem -out $TMP/cert.p12 -passout pass:encoche -name "$NAME"
+# L'OpenSSL d'Apple : celui de Homebrew (OpenSSL 3) chiffre le .p12 d'une façon que `security` ne sait pas lire.
+OSSL=/usr/bin/openssl
+LEGACY=(); $OSSL version | grep -q '^OpenSSL 3' && LEGACY=(-legacy)
+$OSSL req -x509 -newkey rsa:2048 -nodes -keyout $TMP/key.pem -out $TMP/cert.pem -days 3650 -config $TMP/cert.cnf 2>/dev/null
+$OSSL pkcs12 -export $LEGACY -inkey $TMP/key.pem -in $TMP/cert.pem -out $TMP/cert.p12 -passout pass:encoche -name "$NAME"
 security import $TMP/cert.p12 -k ~/Library/Keychains/login.keychain-db -P encoche -T /usr/bin/codesign >/dev/null
 
 # Les autorisations données à l'ancienne signature (ad hoc) ne valent plus : on repart propre.
