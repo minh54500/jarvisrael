@@ -285,7 +285,7 @@ final class Store: ObservableObject {
 
     /// Ne pas déranger : les messages des potes arrivent sans bulle ni son (comptés en non-lus sur l'onglet Potes), leurs
     /// cœurs et coucous sont ignorés, les rappels attendent, personne ne voit ta caméra (sauf une caméra ensemble que tu
-    /// as acceptée) et les potes voient « ne pas déranger ». Claude, lui, prévient toujours.
+    /// as acceptée) et les potes voient « ne pas déranger ». Claude non plus ne prévient plus : sa demande attend dans l'encoche.
     @Published private(set) var dnd = UserDefaults.standard.bool(forKey: "dnd")
 
     func setDND(_ on: Bool) {
@@ -401,6 +401,7 @@ final class Store: ObservableObject {
 
     /// Encoche fermée : elle s'élargit en bulle 4 s. Ouverte : la bulle flotte en bas de l'encoche.
     func showToast(_ t: Toast) {
+        guard !dnd || mode == .expanded else { return }  // ne pas déranger : rien ne sort tout seul de l'encoche fermée
         toast = t
         if mode != .expanded { withAnimation(Self.openAnimation) { mode = .peek } }
         DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) {
@@ -491,7 +492,7 @@ final class Store: ObservableObject {
 
     /// Une commande du mini-terminal est finie : si elle a duré et qu'on regardait ailleurs, le bonhomme le dit.
     func shellFinished(ok: Bool, seconds: Double) {
-        guard seconds > 8, !(mode == .expanded && view == .dev) else { return }
+        guard !dnd, seconds > 8, !(mode == .expanded && view == .dev) else { return }
         Sound.shared.play(ok ? "finish" : "error")
         mochi.emote(ok ? .happy : .worried, 1.8)
         guard !busy else { return }

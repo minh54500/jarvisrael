@@ -90,7 +90,7 @@ extension Store {
             if draft.isEmpty && !sending { focus = sid }
             store(s)
             alert(.approval, state: s.state, session: s)
-            Phone.notify(plan ? "Claude propose un plan" : "Claude te pose une question", s.name, tag: "question")
+            if !muted(s) { Phone.notify(plan ? "Claude propose un plan" : "Claude te pose une question", s.name, tag: "question") }
             let id = p.id
             DispatchQueue.main.asyncAfter(deadline: .now() + 117) { self.expire(id) }
             return
@@ -144,7 +144,7 @@ extension Store {
             if draft.isEmpty && !sending { focus = sid }  // pas de changement de destinataire en pleine écriture
             store(s)
             alert(.approval, state: .approval, session: s)
-            Phone.notify("Claude attend ton autorisation", "\(s.name) : \(title)", tag: "raising_hand")
+            if !muted(s) { Phone.notify("Claude attend ton autorisation", "\(s.name) : \(title)", tag: "raising_hand") }
             // Claude Code abandonne le hook après 120 s : on retire la demande avant.
             let id = permissions.last!.id
             DispatchQueue.main.asyncAfter(deadline: .now() + 117) { self.expire(id) }
@@ -154,8 +154,10 @@ extension Store {
             if type != "permission_prompt" && !s.background && !permissions.contains(where: { $0.session == sid }) {
                 s.state = .waiting
                 s.line = ev["message"] as? String ?? "Claude attend ta réponse"
-                Sound.shared.play("question")
-                Phone.notify("Claude attend ta réponse", s.name, tag: "speech_balloon")
+                if !muted(s) {
+                    Sound.shared.play("question")
+                    Phone.notify("Claude attend ta réponse", s.name, tag: "speech_balloon")
+                }
             }
         case "Stop":
             // Des agents lancés en arrière-plan bossent encore : l'encoche le montre, et le bilan attendra la vraie fin.
@@ -178,7 +180,7 @@ extension Store {
                 s.line = "Terminé : " + turn.text
                 if !turn.files.isEmpty { countLines(sid, cwd: s.cwd, files: turn.files) }
                 if !s.transcript.isEmpty { countTokens(sid, path: s.transcript, from: s.transcriptOffset) }
-                Phone.notify("Claude a terminé", "\(s.name) : \(turn.text)", tag: "white_check_mark")
+                if !muted(s) { Phone.notify("Claude a terminé", "\(s.name) : \(turn.text)", tag: "white_check_mark") }
             }
             if draft.isEmpty && !sending { focus = sid }  // pas de changement de destinataire en pleine écriture
             store(s)
@@ -198,7 +200,7 @@ extension Store {
             store(s)
             alert(.error, state: .error, session: s)
             pinUntil = Date().addingTimeInterval(8)
-            Phone.notify("Claude s'est arrêté", s.name, tag: "warning")
+            if !muted(s) { Phone.notify("Claude s'est arrêté", s.name, tag: "warning") }
             return
         default:
             break
@@ -405,7 +407,7 @@ extension Store {
         s.line = "Agent terminé"
         store(s)
         refreshMochi()
-        Sound.shared.play("pop")
+        if !muted(s) { Sound.shared.play("pop") }
         let sid = s.id
         DispatchQueue.main.asyncAfter(deadline: .now() + 8) { self.settle(sid) }
     }
@@ -417,8 +419,12 @@ extension Store {
         refreshMochi()
     }
 
+    /// Ne pas déranger : aucune session ne fait de bulle, de son ni de notif téléphone (la demande reste dans l'encoche).
+    func muted(_ s: Session) -> Bool { dnd }
+
     func alert(_ v: Panel, state: BotState, session: Session? = nil) {
         refreshMochi()
+        if dnd { return }
         if mode == .expanded && view == .approval && v != .approval && !permissions.isEmpty { return }
         if writing {  // une bulle en haut de l'encoche, pour la session qui vient de bouger ; un clic l'ouvre
             let s = session ?? focused
