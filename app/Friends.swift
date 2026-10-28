@@ -173,7 +173,7 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         presenceSince = Date().addingTimeInterval(presence == .away ? -idle : 0)
         connect()
         publish(force: true)
-        heartbeat = Timer.scheduledTimer(withTimeInterval: 20 * 60, repeats: true) { _ in
+        heartbeat = Timer.scheduledTimer(withTimeInterval: 30 * 60, repeats: true) { _ in
             MainActor.assumeIsolated { Friends.shared.publish(force: true) }
         }
         presenceTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
@@ -279,11 +279,11 @@ final class Friends: NSObject, ObservableObject, URLSessionDataDelegate {
         "\(current.state.rawValue)|\(presence.rawValue)|\(Skin.current.id)|\(Skin.tint ?? "")|\(name)|\(FriendCam.shared.sharing)|\(Store.shared.dnd)|\(note)"
     }
 
-    /// Au plus un message toutes les 30 s (ntfy gratuit limite le nombre de messages par jour) :
+    /// Au plus un statut toutes les 10 min (ntfy gratuit limite à ~250 messages par jour, chat compris) :
     /// les changements rapprochés sont regroupés.
     private func changed() {
         guard configured, sent?.signature != signature, pending == nil else { return }
-        let wait = 30 - Date().timeIntervalSince(sent?.at ?? .distantPast)
+        let wait = 600 - Date().timeIntervalSince(sent?.at ?? .distantPast)
         if wait <= 0 { return publish(force: false) }
         pending = Timer.scheduledTimer(withTimeInterval: wait, repeats: false) { _ in
             MainActor.assumeIsolated {
