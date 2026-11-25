@@ -30,6 +30,17 @@ final class Store: ObservableObject {
     var releaseKeyboard: () -> Void = {}
     /// Encoche visible ou non dans les partages d'écran, enregistrements et captures (fourni par AppDelegate).
     var applyPrivacy: (Bool) -> Void = { _ in }
+
+    /// Encoche cachée depuis le bouton de la barre des menus : plus aucune fenêtre à l'écran, jusqu'à ce qu'on la réaffiche.
+    @Published private(set) var concealed = UserDefaults.standard.bool(forKey: "concealed")
+    var applyConceal: (Bool) -> Void = { _ in }
+
+    func setConcealed(_ on: Bool) {
+        if on { collapse() }
+        concealed = on
+        UserDefaults.standard.set(on, forKey: "concealed")
+        applyConceal(on)
+    }
     var hiddenInShares: Bool { UserDefaults.standard.object(forKey: "privacy.hide") as? Bool ?? true }
 
     /// Étagère : fichiers gardés dans l'encoche le temps de les déposer ou coller ailleurs.

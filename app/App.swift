@@ -30,7 +30,7 @@ final class NotchPanel: NSPanel {
     /// un instant de l'écran (le temps d'une seule opération, invisible).
     func releaseKeyboard() {
         wantsKeyboard = false
-        guard isKeyWindow else { return }
+        guard isKeyWindow, isVisible else { return }
         makeFirstResponder(nil)
         orderOut(nil)
         orderFrontRegardless()
@@ -100,6 +100,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // et le prompteur ne se voient pas en visio. Réglable dans Réglages → Général.
         store.applyPrivacy = { [weak self] hide in self?.panel.sharingType = hide ? .none : .readOnly }
         store.applyPrivacy(store.hiddenInShares)
+        store.applyConceal = { [weak self] on in self?.applyConceal(on) }
+        setUpStatusItem()
+        applyConceal(store.concealed)
 
         bridge = Bridge { event, responder in
             MainActor.assumeIsolated { Store.shared.handle(event, responder) }
@@ -182,6 +185,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return CGSize(width: 184, height: max(24, NSApp.mainMenu?.menuBarHeight ?? 24))
     }
 
+    // MARK: Bouton dans la barre des menus : cacher ou réafficher l'encoche
+
+    private var statusItem: NSStatusItem!
+    private var concealItem: NSMenuItem!
+
+    @MainActor private func setUpStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem.button?.image = NSImage(systemSymbolName: "rectangle.topthird.inset.filled", accessibilityDescription: "Encoche")
+        let menu = NSMenu()
+        concealItem = NSMenuItem(title: "Cacher l'encoche", action: #selector(toggleConceal), keyEquivalent: "")
+        concealItem.target = self
+        menu.addItem(concealItem)
+        let settings = NSMenuItem(title: "Réglages…", action: #selector(openSettings), keyEquivalent: "")
+        settings.target = self
+        menu.addItem(settings)
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Quitter Encoche", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        statusItem.menu = menu
+    }
+
+    @MainActor private func applyConceal(_ on: Bool) {
+        concealItem?.title = on ? "Afficher l'encoche" : "Cacher l'encoche"
+        statusItem?.button?.alphaValue = on ? 0.5 : 1
+        if on { panel.orderOut(nil) } else { panel.orderFrontRegardless() }
+    }
+
+    @objc @MainActor private func toggleConceal() { Store.shared.setConcealed(!Store.shared.concealed) }
+    @objc @MainActor private func openSettings() { SettingsWindow.show() }
+
     @MainActor private func place() {
         let s = Self.notchScreen.frame, size = Store.panelSize
         panel.setFrame(NSRect(x: s.midX - size.width / 2, y: s.maxY - size.height, width: size.width, height: size.height), display: true)
@@ -190,6 +222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Suivi de la souris (60 fois par seconde) : survol, regard du Mochi, fichiers glissés vers l'encoche.
     @MainActor private func track() {
         let store = Store.shared
+        guard !store.concealed else { return }
         tick += 1
         if store.mode != .expanded && tick % 2 == 1 && NSEvent.pressedMouseButtons == 0 { return }  // 30 fois/s fermée suffit
         let m = NSEvent.mouseLocation, f = panel.frame
