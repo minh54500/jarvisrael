@@ -63,7 +63,7 @@ final class Sound {
     }
 
     func play(_ name: String) {
-        guard on, let buffer = buffers[name] else { return }
+        guard on, !UserDefaults.standard.bool(forKey: "concealed"), let buffer = buffers[name] else { return }  // cachée (réunion) : silence
         queue.async {
             self.setUpIfNeeded()
             if !self.engine.isRunning {
